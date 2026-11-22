@@ -26,7 +26,13 @@ jobs:
           tag_name: build-${{ github.run_number }}
           name: 쿠비스 3.1.${{ github.run_number }}
           body: ${{ github.event.head_commit.message }}
-          files: |
-            kuvis.apk
-            kuvis-notify-helper.apk
+          files: kuvis.apk
           make_latest: true
+      # 알림 도우미는 따로 (본체 업데이트와 섞이지 않게)
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: notify-helper
+          name: 쿠비스 알림 도우미
+          body: 쿠비스 알림 읽기·답장 도우미 앱. 컴퓨터로 한 번만 설치.
+          files: kuvis-notify-helper.apk
+          make_latest: false
