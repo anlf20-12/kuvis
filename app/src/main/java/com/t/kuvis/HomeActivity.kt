@@ -58,7 +58,14 @@ class HomeActivity : Activity() {
     private lateinit var appList: RecyclerView
     private val appAdapter = AppAdapter()
     private var apps: List<AppEntry> = emptyList()
-    private lateinit var gestures: GestureDetector
+    // 손가락 따라가는 쓸기
+    private var touchSlop = 16
+    private var downX = 0f
+    private var downY = 0f
+    private var decided = false
+    private var dragMode = 0 // 0 없음, 1 앱 창 올리기, 2 앱 창 내리기, 3 알림창
+    private var startInDock = false
+    private var vt: android.view.VelocityTracker? = null
 
     private val onChanged: () -> Unit = { refreshAll() }
     private val onPage: (String) -> Unit = { p ->
@@ -122,16 +129,7 @@ class HomeActivity : Activity() {
         pager.setCurrentItem(1, false)
         drawDots(1)
 
-        gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
-                if (e1 == null || drawer.visibility == View.VISIBLE) return false
-                val h = root.height.toFloat()
-                if (abs(vy) < abs(vx) * 1.5f) return false
-                if (vy < -1200 && e1.y > h * 0.62f) { openDrawer(); return true }
-                if (vy > 1200 && e1.y < h * 0.25f) { expandNotifications(); return true }
-                return false
-            }
-        })
+        touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
 
         Bus.onChanged(onChanged)
         Bus.onPage(onPage)
@@ -177,9 +175,97 @@ class HomeActivity : Activity() {
         // 런처는 닫히지 않음
     }
 
+    private fun currentPage(): View = listOf(calendarPage, centerPage, memoPage)[pager.currentItem]
+
+    private fun drawerHeight(): Float = (if (drawer.height > 0) drawer.height else window.decorView.height).toFloat()
+
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        gestures.onTouchEvent(ev)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.rawX; downY = ev.rawY; decided = false; dragMode = 0
+                vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(ev)
+                val loc = IntArray(2); dockRow.getLocationOnScreen(loc)
+                startInDock = ev.rawY >= loc[1] - dp(40)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                vt?.addMovement(ev)
+                val dx = ev.rawX - downX
+                val dy = ev.rawY - downY
+                if (!decided) {
+                    if (abs(dy) > touchSlop * 1.5f && abs(dy) > abs(dx) * 1.3f) {
+                        decided = true
+                        if (drawer.visibility != View.VISIBLE) {
+                            val page = currentPage()
+                            if (dy < 0 && (startInDock || !page.canScrollVertically(1))) {
+                                dragMode = 1
+                                prepareDrawer()
+                                drawer.translationY = drawerHeight()
+                                drawer.visibility = View.VISIBLE
+                            } else if (dy > 0 && !page.canScrollVertically(-1)) {
+                                dragMode = 3
+                                expandNotifications()
+                            }
+                        } else if (dy > 0 && !appList.canScrollVertically(-1)) {
+                            dragMode = 2
+                            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                                .hideSoftInputFromWindow(search.windowToken, 0)
+                        }
+                        if (dragMode != 0) {
+                            // 아래 화면(페이지 스크롤 등)이 이 손가락을 놓게 함
+                            val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
+                            super.dispatchTouchEvent(c); c.recycle()
+                        }
+                    } else if (abs(dx) > touchSlop * 1.5f) {
+                        decided = true // 옆으로 넘기기 → 페이지 이동
+                    }
+                }
+                val h = drawerHeight()
+                when (dragMode) {
+                    1 -> { drawer.translationY = (h + dy).coerceIn(0f, h); return true }
+                    2 -> { drawer.translationY = dy.coerceIn(0f, h); return true }
+                    3 -> return true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                vt?.addMovement(ev)
+                if (dragMode == 1 || dragMode == 2) {
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    val h = drawerHeight()
+                    val open = when {
+                        vy < -700 -> true
+                        vy > 700 -> false
+                        else -> drawer.translationY < h / 2
+                    }
+                    settleDrawer(open)
+                    dragMode = 0
+                    return true
+                }
+                if (dragMode == 3) { dragMode = 0; return true }
+            }
+        }
         return super.dispatchTouchEvent(ev)
+    }
+
+    /** 손을 뗀 뒤 부드럽게 끝까지 */
+    private fun settleDrawer(open: Boolean) {
+        val h = drawerHeight()
+        if (open) {
+            drawer.visibility = View.VISIBLE
+            drawer.animate().translationY(0f).setDuration(180)
+                .setInterpolator(android.view.animation.DecelerateInterpolator()).withEndAction(null).start()
+        } else {
+            drawer.animate().translationY(h).setDuration(200)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .withEndAction { drawer.visibility = View.GONE; openFolder = null }.start()
+        }
+    }
+
+    private fun prepareDrawer() {
+        openFolder = null
+        search.setText("")
+        appAdapter.filter("")
+        appList.scrollToPosition(0)
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
@@ -436,20 +522,16 @@ class HomeActivity : Activity() {
 
     private fun openDrawer() {
         if (drawer.visibility == View.VISIBLE) return
-        openFolder = null
-        search.setText("")
-        appAdapter.filter("")
+        prepareDrawer()
+        drawer.translationY = drawerHeight()
         drawer.visibility = View.VISIBLE
-        drawer.translationY = drawer.height.toFloat().coerceAtLeast(dpf(400f))
-        drawer.animate().translationY(0f).setDuration(220).start()
-        appList.scrollToPosition(0)
+        settleDrawer(true)
     }
 
     private fun closeDrawer() {
         if (drawer.visibility != View.VISIBLE) return
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
-        drawer.animate().translationY(drawer.height.toFloat()).setDuration(180)
-            .withEndAction { drawer.visibility = View.GONE }.start()
+        settleDrawer(false)
     }
 
     private var openFolder: String? = null
