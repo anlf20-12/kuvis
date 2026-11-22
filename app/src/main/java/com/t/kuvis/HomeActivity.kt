@@ -907,6 +907,10 @@ class HomeActivity : Activity() {
                         } else if (dy > 0 && !appList.canScrollVertically(-1)) {
                             dragMode = 2
                             hideKeyboard()
+                        } else if (dy < 0 && !appList.canScrollVertically(1)) {
+                            // 서랍에서 한 번 더 위로 쓸면 홈 화면으로 (서랍이 위로 빠져나감)
+                            dragMode = 4
+                            hideKeyboard()
                         }
                         if (dragMode != 0) {
                             val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
@@ -920,6 +924,7 @@ class HomeActivity : Activity() {
                 when (dragMode) {
                     1 -> { setDrawerPos((h + dy).coerceIn(0f, h)); return true }
                     2 -> { setDrawerPos(dy.coerceIn(0f, h)); return true }
+                    4 -> { setDrawerPos(dy.coerceIn(-h, 0f)); return true }
                     3 -> return true
                 }
             }
@@ -930,6 +935,14 @@ class HomeActivity : Activity() {
                     val vy = vt?.yVelocity ?: 0f
                     val open = when { vy < -700 -> true; vy > 700 -> false; else -> drawer.translationY < drawerHeight() / 2 }
                     settleDrawer(open)
+                    dragMode = 0
+                    return true
+                }
+                if (dragMode == 4) {
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    val close = vy < -700 || (vy < 700 && drawer.translationY < -drawerHeight() / 4)
+                    settleDrawer(!close, up = true)
                     dragMode = 0
                     return true
                 }
@@ -1048,7 +1061,7 @@ class HomeActivity : Activity() {
     /** 서랍 위치에 맞춰 홈 흐리기·배경 블러 */
     private fun setDrawerPos(ty: Float) {
         drawer.translationY = ty
-        val frac = (1f - ty / drawerHeight()).coerceIn(0f, 1f)
+        val frac = (1f - abs(ty) / drawerHeight()).coerceIn(0f, 1f)
         mainContent.alpha = 1f - frac
         if (Build.VERSION.SDK_INT >= 31 && blurSupported()) window.setBackgroundBlurRadius((frac * 70).toInt())
     }
@@ -1188,9 +1201,9 @@ class HomeActivity : Activity() {
         setDrawerPos(drawerHeight())
     }
 
-    private fun settleDrawer(open: Boolean) {
+    private fun settleDrawer(open: Boolean, up: Boolean = false) {
         val from = drawer.translationY
-        val to = if (open) 0f else drawerHeight()
+        val to = if (open) 0f else if (up) -drawerHeight() else drawerHeight()
         drawer.visibility = View.VISIBLE
         android.animation.ValueAnimator.ofFloat(from, to).apply {
             duration = if (open) 200 else 220
