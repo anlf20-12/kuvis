@@ -123,14 +123,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         val gridStart = first.minusDays((first.dayOfWeek.value % 7).toLong())
         events = loadEvents(gridStart, gridStart.plusDays(42))
         val today = LocalDate.now()
-        for (w in 0 until 6) {
-            val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
-            for (d in 0 until 7) {
-                val date = gridStart.plusDays((w * 7 + d).toLong())
-                row.addView(dayCell(date, d, today), LinearLayout.LayoutParams(0, home.dp(74), 1f))
-            }
-            c.addView(row)
-        }
+        for (w in 0 until 6) c.addView(weekRow(gridStart.plusDays((w * 7).toLong()), today), LinearLayout.LayoutParams(MATCH, home.dp(74)))
 
         // 고른 날 일정
         val list = card()
@@ -166,6 +159,68 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         }
     }
 
+    /** 한 주: 아래는 날짜 칸(누르면 선택), 위에는 일정 막대. 여러 날 이어지는 일정은 한 막대로 이어 그림 */
+    private fun weekRow(d0: LocalDate, today: LocalDate): View {
+        val d6 = d0.plusDays(6)
+        val frame = FrameLayout(home)
+        val days = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
+        for (d in 0 until 7) days.addView(dayCell(d0.plusDays(d.toLong()), d, today), LinearLayout.LayoutParams(0, MATCH, 1f))
+        frame.addView(days, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        // 이 주에 걸친 일정 → 칸(줄) 배정
+        data class Seg(val e: Ev, val from: Int, val to: Int)
+        val segs = events.filter { !it.endDate.isBefore(d0) && !it.startDate.isAfter(d6) }.map {
+            val a = if (it.startDate.isBefore(d0)) 0 else (it.startDate.toEpochDay() - d0.toEpochDay()).toInt()
+            val b = if (it.endDate.isAfter(d6)) 6 else (it.endDate.toEpochDay() - d0.toEpochDay()).toInt()
+            Seg(it, a, b)
+        }.sortedWith(compareBy<Seg> { -(it.to - it.from) }.thenBy { it.from }.thenBy { !it.e.allDay }.thenBy { it.e.begin })
+        val maxLanes = 3
+        val lanes = mutableListOf<MutableList<Seg>>()
+        val hidden = IntArray(7)
+        for (sg in segs) {
+            val lane = lanes.indexOfFirst { l -> l.none { it.from <= sg.to && sg.from <= it.to } }
+            when {
+                lane >= 0 -> lanes[lane].add(sg)
+                lanes.size < maxLanes -> lanes.add(mutableListOf(sg))
+                else -> for (c in sg.from..sg.to) hidden[c]++
+            }
+        }
+        val bars = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; setPadding(0, home.dp(25), 0, 0) }
+        for (l in lanes) {
+            val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
+            var col = 0
+            for (sg in l.sortedBy { it.from }) {
+                if (sg.from > col) row.addView(View(home), LinearLayout.LayoutParams(0, 1, (sg.from - col).toFloat()))
+                val contL = sg.e.startDate.isBefore(d0); val contR = sg.e.endDate.isAfter(d6)
+                val r = home.dpf(3f)
+                row.addView(TextView(home).apply {
+                    text = sg.e.title; textSize = 9.5f; setTextColor(Color.WHITE)
+                    maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+                    setPadding(home.dp(3), 0, home.dp(2), 0)
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(sg.e.color)
+                        cornerRadii = floatArrayOf(if (contL) 0f else r, if (contL) 0f else r, if (contR) 0f else r, if (contR) 0f else r,
+                            if (contR) 0f else r, if (contR) 0f else r, if (contL) 0f else r, if (contL) 0f else r)
+                    }
+                }, LinearLayout.LayoutParams(0, home.dp(14), (sg.to - sg.from + 1).toFloat()).apply {
+                    leftMargin = if (contL) 0 else home.dp(1); rightMargin = if (contR) 0 else home.dp(1)
+                })
+                col = sg.to + 1
+            }
+            if (col < 7) row.addView(View(home), LinearLayout.LayoutParams(0, 1, (7 - col).toFloat()))
+            bars.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = home.dp(2) })
+        }
+        if (hidden.any { it > 0 }) {
+            val more = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
+            for (c in 0 until 7) more.addView(home.txt(if (hidden[c] > 0) "+${hidden[c]}" else "", 9f, C.dim, gravity = Gravity.CENTER),
+                LinearLayout.LayoutParams(0, WRAP, 1f))
+            bars.addView(more)
+        }
+        // 막대는 누르기를 가로채지 않음 → 아래 날짜 칸이 눌림
+        frame.addView(bars, FrameLayout.LayoutParams(MATCH, MATCH))
+        return frame
+    }
+
     private fun dayCell(date: LocalDate, dow: Int, today: LocalDate): View {
         val cell = LinearLayout(home).apply {
             orientation = LinearLayout.VERTICAL
@@ -187,18 +242,6 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         val numWrap = FrameLayout(home)
         numWrap.addView(num, FrameLayout.LayoutParams(home.dp(22), home.dp(22), Gravity.CENTER_HORIZONTAL))
         cell.addView(numWrap)
-
-        val todays = events.filter { !date.isBefore(it.startDate) && !date.isAfter(it.endDate) }
-            .sortedWith(compareBy<Ev> { !it.allDay }.thenBy { it.begin })
-        for (e in todays.take(3)) {
-            cell.addView(TextView(home).apply {
-                text = e.title; textSize = 9.5f; setTextColor(Color.WHITE)
-                maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-                setPadding(home.dp(2), 0, home.dp(2), 0)
-                background = rounded(e.color, home.dpf(3f))
-            }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = home.dp(2) })
-        }
-        if (todays.size > 3) cell.addView(home.txt("+${todays.size - 3}", 9f, C.dim, gravity = Gravity.CENTER))
         return cell
     }
 
