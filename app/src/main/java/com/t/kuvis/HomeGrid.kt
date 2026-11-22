@@ -20,10 +20,10 @@ import kotlin.math.abs
 
 /**
  * 홈 화면 바둑판 (페이지 3장, 각 COLS × ROWS 칸).
- * kind: calendar | weather | clock | todo | memo | kuvis | app
+ * kind: calendar | weather | clock | todo | memo | kuvis | app | widget(pkg=위젯 id) | shortcut(pkg=패키지|id)
  */
 data class GridItem(val kind: String, val pkg: String = "", val x: Int, val y: Int, val w: Int, val h: Int) {
-    val id: String get() = if (kind == "app") "app:$pkg" else kind
+    val id: String get() = if (kind == "app" || kind == "widget" || kind == "shortcut") "$kind:$pkg" else kind
 
     fun toJson(): JSONObject = JSONObject().put("kind", kind).put("pkg", pkg).put("x", x).put("y", y).put("w", w).put("h", h)
 
@@ -92,7 +92,16 @@ object HomeGrid {
     fun prune(ctx: Context, installed: Set<String>) {
         for (p in 0 until PAGES) {
             val l = items(ctx, p)
-            val k = l.filter { it.kind != "app" || it.pkg in installed }
+            val k = l.filter {
+                when (it.kind) {
+                    "app" -> it.pkg in installed
+                    "shortcut" -> Shortcuts.pkgOf(it.pkg) in installed
+                    "widget" -> (it.pkg.toIntOrNull()?.let { id -> WidgetHost.info(ctx, id) } != null).also { ok ->
+                        if (!ok) it.pkg.toIntOrNull()?.let { id -> WidgetHost.delete(ctx, id) }
+                    }
+                    else -> true
+                }
+            }
             if (k.size != l.size) save(ctx, p, k)
         }
     }

@@ -263,6 +263,10 @@ class HomeActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        when (requestCode) {
+            61 -> { if (resultCode == RESULT_OK) configureOrPlace() else cancelPending(); return }
+            62 -> { if (resultCode == RESULT_OK) placePending() else cancelPending(); return }
+        }
         if (requestCode == 51 && resultCode == RESULT_OK) {
             val t = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
             search.setText(t.replace(" 열어 줘", "").replace(" 열어줘", "").trim())
@@ -335,6 +339,10 @@ class HomeActivity : Activity() {
         "todo" -> todoW
         "memo" -> memoW
         "kuvis" -> kuvisW
+        "widget" -> widgetView(item)
+        "shortcut" -> appIconView(this, Shortcuts.icon(this, item.pkg), Shortcuts.label(this, item.pkg)).apply {
+            setOnClickListener { Shortcuts.start(this@HomeActivity, item.pkg) }
+        }
         else -> {
             val app = apps.firstOrNull { it.pkg == item.pkg }
             val icon = app?.icon ?: try { packageManager.getApplicationIcon(item.pkg) } catch (_: Exception) { null }
@@ -344,6 +352,172 @@ class HomeActivity : Activity() {
 
     private fun renderGrids() {
         for (g in grids) g.setItems(HomeGrid.items(this, g.page)) { viewFor(it) }
+        root.post { syncWidgetSizes() }
+    }
+
+    // ---------- 다른 앱 위젯 ----------
+    private val widgetSizes = HashMap<Int, String>()
+
+    private fun widgetView(item: GridItem): View {
+        val id = item.pkg.toIntOrNull() ?: -1
+        val info = if (id >= 0) WidgetHost.info(this, id) else null
+        if (info == null) return txt("위젯을 불러올 수 없어요.\n길게 눌러 빼 주세요.", 12f, Color.WHITE, gravity = Gravity.CENTER).apply {
+            background = rounded(Color.argb(90, 0, 0, 0), dpf(18f))
+        }
+        return WidgetHost.host(this).createView(applicationContext, id, info).apply { setPadding(0, 0, 0, 0) }
+    }
+
+    /** 위젯에 칸 크기를 알려 줌 (크기 바꿨을 때 내용이 맞게 다시 그려지도록) */
+    private fun syncWidgetSizes() {
+        val g = grids[0]
+        if (g.cellW <= 0f) return
+        WidgetHost.cellW = g.cellW; WidgetHost.cellH = g.cellH
+        for (p in 0 until HomeGrid.PAGES) for (it in HomeGrid.items(this, p)) {
+            if (it.kind != "widget") continue
+            val id = it.pkg.toIntOrNull() ?: continue
+            val k = "${it.w}x${it.h}"
+            if (widgetSizes[id] == k) continue
+            widgetSizes[id] = k
+            try { WidgetHost.mgr(this).updateAppWidgetOptions(id, WidgetHost.sizeOptions(this, it.w, it.h)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun minSizeOf(item: GridItem): Pair<Int, Int> {
+        if (item.kind != "widget") return HomeGrid.minSize(item.kind)
+        val info = item.pkg.toIntOrNull()?.let { WidgetHost.info(this, it) } ?: return 1 to 1
+        val c = WidgetHost.cells(this, info)
+        return c[2] to c[3]
+    }
+
+    /** 홈에서 빼기 (다른 앱 위젯이면 위젯 연결도 끊음) */
+    private fun removeFromHome(page: Int, item: GridItem) {
+        HomeGrid.save(this, page, HomeGrid.items(this, page).filter { it != item })
+        if (item.kind == "widget") item.pkg.toIntOrNull()?.let { WidgetHost.delete(this, it); widgetSizes.remove(it) }
+        if (item.kind in HomeGrid.KINDS) toast("빈 곳을 길게 눌러 '쿠비스 위젯 추가'로 다시 넣을 수 있어요.")
+    }
+
+    private class PendingWidget(val id: Int, val info: android.appwidget.AppWidgetProviderInfo, val page: Int, val cell: Pair<Int, Int>?)
+    private var pending: PendingWidget? = null
+
+    /** 위젯 고르는 화면 (삼성처럼 앱별로 묶고 미리보기) */
+    private fun openWidgetPicker(page: Int, cell: Pair<Int, Int>?) {
+        val providers = try { WidgetHost.mgr(this).installedProviders } catch (_: Exception) { emptyList() }
+        if (providers.isEmpty()) { toast("넣을 수 있는 위젯이 없어요."); return }
+        val pm = packageManager
+        val col = Collator.getInstance(Locale.KOREAN)
+        fun appLabel(pkg: String) = try { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+        val groups = providers.groupBy { it.provider.packageName }.map { (pkg, l) -> Triple(pkg, appLabel(pkg), l) }
+            .sortedWith { a, b -> col.compare(a.second, b.second) }
+
+        val dlg = android.app.Dialog(this, android.R.style.Theme_DeviceDefault_NoActionBar)
+        val outer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(16, 18, 24)) }
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(20), dp(18), dp(12), dp(10)) }
+        head.addView(txt("위젯", 26f, Color.WHITE, bold = true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        head.addView(txt("✕", 22f, Color.WHITE, gravity = Gravity.CENTER).apply { setPadding(dp(14), dp(6), dp(14), dp(6)); setOnClickListener { dlg.dismiss() } })
+        outer.addView(head)
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, dp(12), dp(24)) }
+        val sv = android.widget.ScrollView(this).apply { addView(list) }
+        outer.addView(sv, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        for ((pkg, label, infos) in groups) {
+            val section = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = rounded(Color.argb(40, 255, 255, 255), dpf(20f))
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+            }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            row.addView(ImageView(this).apply { setImageDrawable(try { pm.getApplicationIcon(pkg) } catch (_: Exception) { null }) }, LinearLayout.LayoutParams(dp(40), dp(40)))
+            row.addView(txt(label, 16f, Color.WHITE, bold = true).apply { setPadding(dp(12), 0, 0, 0) }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            val count = txt("${infos.size}개  ›", 13f, C.dim)
+            row.addView(count)
+            section.addView(row)
+            var shelf: View? = null
+            row.setOnClickListener {
+                shelf?.let { v ->
+                    v.visibility = if (v.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                    count.text = if (v.visibility == View.VISIBLE) "${infos.size}개  ⌄" else "${infos.size}개  ›"
+                    return@setOnClickListener
+                }
+                // 처음 펼칠 때 미리보기 그림을 불러옴
+                val hs = android.widget.HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+                val cards = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, dp(4)) }
+                for (info in infos) {
+                    val c = WidgetHost.cells(this, info)
+                    val card = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL
+                        background = rounded(Color.argb(50, 255, 255, 255), dpf(16f))
+                        setPadding(dp(10), dp(10), dp(10), dp(10))
+                        setOnClickListener { dlg.dismiss(); beginAddWidget(info, page, cell) }
+                    }
+                    val prev = try { info.loadPreviewImage(this, 0) } catch (_: Exception) { null }
+                        ?: try { info.loadIcon(this, 0) } catch (_: Exception) { null }
+                    card.addView(ImageView(this).apply { setImageDrawable(prev); scaleType = ImageView.ScaleType.FIT_CENTER }, LinearLayout.LayoutParams(dp(150), dp(110)))
+                    card.addView(txt(WidgetHost.label(this, info), 13f, Color.WHITE, gravity = Gravity.CENTER).apply {
+                        maxLines = 2; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(6), 0, 0)
+                    }, LinearLayout.LayoutParams(dp(150), WRAP))
+                    card.addView(txt("${c[0]} × ${c[1]}", 12f, C.dim, gravity = Gravity.CENTER), LinearLayout.LayoutParams(dp(150), WRAP))
+                    cards.addView(card, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(10) })
+                }
+                hs.addView(cards)
+                section.addView(hs)
+                shelf = hs
+                count.text = "${infos.size}개  ⌄"
+            }
+            list.addView(section, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
+        }
+        dlg.setContentView(outer)
+        dlg.show()
+    }
+
+    private fun beginAddWidget(info: android.appwidget.AppWidgetProviderInfo, page: Int, cell: Pair<Int, Int>?) {
+        val id = WidgetHost.host(this).allocateAppWidgetId()
+        pending = PendingWidget(id, info, page, cell)
+        val ok = try { WidgetHost.mgr(this).bindAppWidgetIdIfAllowed(id, info.profile, info.provider, null) } catch (_: Exception) { false }
+        if (ok) configureOrPlace()
+        else try {
+            // 안드로이드가 '쿠비스가 위젯을 만들도록 허용할까요?'를 물어봄
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_BIND)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+                .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER_PROFILE, info.profile), 61)
+        } catch (_: Exception) { cancelPending(); toast("위젯 허용 화면을 열 수 없어요.") }
+    }
+
+    private fun configureOrPlace() {
+        val p = pending ?: return
+        if (p.info.configure != null) {
+            try { WidgetHost.host(this).startAppWidgetConfigureActivityForResult(this, p.id, 0, 62, null); return }
+            catch (_: Exception) {}
+        }
+        placePending()
+    }
+
+    private fun placePending() {
+        val p = pending ?: return
+        pending = null
+        val c = WidgetHost.cells(this, p.info)
+        if (HomeGrid.placeAnywhere(this, "widget", p.id.toString(), c[0], c[1], c[2], c[3], p.page, p.cell)) {
+            renderGrids()
+        } else {
+            WidgetHost.delete(this, p.id)
+            toast("홈 화면에 빈 칸이 모자라요. 다른 걸 옮기거나 줄여 주세요.")
+        }
+    }
+
+    private fun cancelPending() {
+        pending?.let { WidgetHost.delete(this, it.id) }
+        pending = null
+    }
+
+    override fun onStart() {
+        super.onStart()
+        try { WidgetHost.host(this).startListening() } catch (_: Exception) {}
+    }
+
+    override fun onStop() {
+        super.onStop()
+        try { WidgetHost.host(this).stopListening() } catch (_: Exception) {}
     }
 
     fun canStartGridGesture() = drawer.visibility != View.VISIBLE && drag == null && resize == null && dragMode == 0
@@ -362,6 +536,7 @@ class HomeActivity : Activity() {
         val missing = HomeGrid.KINDS.keys.filter { it !in HomeGrid.placedKinds(this) }
         val items = mutableListOf<String>()
         if (missing.isNotEmpty()) items.add("쿠비스 위젯 추가")
+        items.add("다른 앱 위젯 추가")
         items.add("앱 아이콘 추가"); items.add("배경화면 바꾸기"); items.add("쿠비스 설정"); items.add("홈 화면을 처음 배치로")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setItems(items.toTypedArray()) { _, w ->
@@ -370,6 +545,7 @@ class HomeActivity : Activity() {
                         .setTitle("어떤 위젯을 넣을까요?")
                         .setItems(missing.map { HomeGrid.label(it) }.toTypedArray()) { _, k -> addKuvisWidget(grid.page, missing[k], cell) }
                         .show()
+                    "다른 앱 위젯 추가" -> openWidgetPicker(grid.page, cell)
                     "앱 아이콘 추가" -> {
                         val visible = visibleApps()
                         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -380,8 +556,12 @@ class HomeActivity : Activity() {
                     "배경화면 바꾸기" -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "배경화면"))
                     "쿠비스 설정" -> SettingsActivity.open(this)
                     "홈 화면을 처음 배치로" -> AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                        .setMessage("홈 화면 3장을 처음 배치로 되돌릴까요? 홈에 꺼내 둔 앱 아이콘은 빠져요. (앱은 지워지지 않아요)")
-                        .setPositiveButton("되돌리기") { _, _ -> HomeGrid.resetAll(this); renderGrids() }
+                        .setMessage("홈 화면 3장을 처음 배치로 되돌릴까요? 홈에 꺼내 둔 앱 아이콘·다른 앱 위젯은 빠져요. (앱은 지워지지 않아요)")
+                        .setPositiveButton("되돌리기") { _, _ ->
+                            for (p in 0 until HomeGrid.PAGES) HomeGrid.items(this, p).filter { it.kind == "widget" }
+                                .forEach { it.pkg.toIntOrNull()?.let { id -> WidgetHost.delete(this, id) } }
+                            HomeGrid.resetAll(this); renderGrids()
+                        }
                         .setNegativeButton("취소", null).show()
                 }
             }.show()
@@ -413,21 +593,41 @@ class HomeActivity : Activity() {
 
     private fun gridItemMenu(page: Int, item: GridItem) {
         val opts = mutableListOf<String>()
-        if (item.kind != "app") opts.add("크기 조절")
-        opts.add("홈에서 빼기")
-        if (item.kind == "app") { opts.add("숨기기"); opts.add("앱 정보"); opts.add("앱 삭제") }
+        var title = HomeGrid.label(item.kind)
+        var pkg = item.pkg
+        var winfo: android.appwidget.AppWidgetProviderInfo? = null
+        when (item.kind) {
+            "app" -> {
+                title = apps.firstOrNull { it.pkg == item.pkg }?.label ?: item.pkg
+                opts.add("홈에서 빼기"); opts.add("숨기기"); opts.add("앱 정보"); opts.add("앱 삭제")
+            }
+            "shortcut" -> {
+                title = Shortcuts.label(this, item.pkg); pkg = Shortcuts.pkgOf(item.pkg)
+                opts.add("홈에서 빼기"); opts.add("앱 정보")
+            }
+            "widget" -> {
+                winfo = item.pkg.toIntOrNull()?.let { WidgetHost.info(this, it) }
+                title = winfo?.let { WidgetHost.label(this, it) } ?: "위젯"
+                pkg = winfo?.provider?.packageName ?: ""
+                if (winfo != null && WidgetHost.resizable(winfo)) opts.add("크기 조절")
+                if (winfo?.configure != null) opts.add("위젯 설정")
+                opts.add("홈에서 빼기")
+                if (pkg.isNotEmpty()) opts.add("앱 정보")
+            }
+            else -> { opts.add("크기 조절"); opts.add("홈에서 빼기") }
+        }
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle(if (item.kind == "app") apps.firstOrNull { it.pkg == item.pkg }?.label ?: item.pkg else HomeGrid.label(item.kind))
+            .setTitle(title)
             .setItems(opts.toTypedArray()) { _, w ->
                 when (opts[w]) {
                     "크기 조절" -> beginResize(page, item)
-                    "홈에서 빼기" -> {
-                        HomeGrid.save(this, page, HomeGrid.items(this, page).filter { it != item })
-                        renderGrids()
-                        if (item.kind != "app") toast("빈 곳을 길게 눌러 '쿠비스 위젯 추가'로 다시 넣을 수 있어요.")
+                    "위젯 설정" -> item.pkg.toIntOrNull()?.let { id ->
+                        try { WidgetHost.host(this).startAppWidgetConfigureActivityForResult(this, id, 0, 63, null) }
+                        catch (_: Exception) { toast("이 위젯은 설정을 다시 열 수 없어요.") }
                     }
+                    "홈에서 빼기" -> { removeFromHome(page, item); renderGrids() }
                     "숨기기" -> hideApp(item.pkg)
-                    "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${item.pkg}")))
+                    "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg")))
                     "앱 삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${item.pkg}")))
                 }
             }.show()
@@ -544,8 +744,7 @@ class HomeActivity : Activity() {
         val d = drag ?: return
         val page = pager.currentItem
         if (overDelete(rawY) && d.fromPage != null) {
-            HomeGrid.save(this, d.fromPage, HomeGrid.items(this, d.fromPage).filter { it != d.item })
-            if (d.item.kind != "app") toast("빈 곳을 길게 눌러 '쿠비스 위젯 추가'로 다시 넣을 수 있어요.")
+            removeFromHome(d.fromPage, d.item)
         } else {
             val t = d.target
             if (t != null && t.third) {
@@ -626,7 +825,7 @@ class HomeActivity : Activity() {
                 val cx = ((ev.rawX - gl[0] - g.paddingLeft) / g.cellW).roundToInt()
                 val cy = ((ev.rawY - gl[1] - g.paddingTop) / g.cellH).roundToInt()
                 val it = r.item
-                val (mw, mh) = HomeGrid.minSize(it.kind)
+                val (mw, mh) = minSizeOf(it)
                 val p = if (r.corner == 2) {
                     it.copy(w = (cx - it.x).coerceIn(mw, HomeGrid.COLS - it.x), h = (cy - it.y).coerceIn(mh, HomeGrid.ROWS - it.y))
                 } else {

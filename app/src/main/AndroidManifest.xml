@@ -29,6 +29,7 @@
         </intent>
         <intent><action android:name="android.media.action.STILL_IMAGE_CAMERA" /></intent>
         <intent><action android:name="android.intent.action.DIAL" /></intent>
+        <intent><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent>
         <package android:name="com.t.kuvis.notify" />
         <package android:name="com.anthropic.claude" />
         <provider android:authorities="com.t.kuvis.notify" />
@@ -59,6 +60,19 @@
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 다른 앱의 '홈 화면에 추가' (바로가기·위젯) -->
+        <activity
+            android:name=".PinActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.content.pm.action.CONFIRM_PIN_SHORTCUT" />
+                <action android:name="android.content.pm.action.CONFIRM_PIN_APPWIDGET" />
             </intent-filter>
         </activity>
 
