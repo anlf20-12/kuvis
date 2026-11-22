@@ -374,6 +374,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         val mem = Store(act).memory()
         if (mem.isNotEmpty()) lines.add("T에 대해 기억하고 있는 것(필요할 때만 자연스럽게 쓴다):\n" + mem.joinToString("\n") { "- $it" })
         lines.add("T가 '기억해 줘'라고 하거나 앞으로도 알아야 할 사실을 말하면 remember 도구로 저장한다. 잊어 달라고 하면 forget.")
+        lines.add("T가 쿠비스에 새 기능이나 고칠 점을 말하면(예: '이런 기능 있으면 좋겠어') feature_request로 적고, Claude 앱에서 처리되면 업데이트로 나온다고 말한다.")
         lines.add("알림(카톡 등) 읽기·답장: read_notifications, reply_notification. 답장은 보내기 전에 누구에게 무엇을 보낼지 말하고 확인받는다.")
         return lines.joinToString("\n")
     }
@@ -588,6 +589,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (full.isBlank()) { full = "됐어요."; turnBubble?.text = full; enqueueSpeech(full) }
         history.add("assistant" to full)
         saveHistory()
+        history.lastOrNull { it.first == "user" }?.second?.let { u -> try { Journal.add(act, u, full) } catch (_: Exception) {} }
         streamDone = true
         if (pendingUtter == 0) finishTurn()
     }

@@ -95,6 +95,8 @@ class SettingsActivity : Activity() {
         buildVoice(section("목소리와 대화"))
         // 4. 할 수 있는 일
         buildAbilities(section("쿠비스가 할 수 있는 일"))
+        // 4-0. 기억장 연결
+        buildMemorySync(section("기억장 (Claude 앱과 함께 쓰기)"))
         // 4-1. 기억
         memoryBox = section("쿠비스가 기억하는 것")
         refreshMemory()
@@ -495,6 +497,7 @@ class SettingsActivity : Activity() {
             "📞 연락" to listOf("○○ 전도사님께 전화해 줘 (확인 후 걸어요)", "○○에게 '조금 늦어요' 문자 보내 줘 (확인 후 보내요)"),
             "💬 알림" to listOf("카톡 온 거 읽어 줘", "방금 카톡에 '곧 갈게'라고 답해 줘 (확인 후 보내요)"),
             "🧠 기억" to listOf("기억해 줘, 다누 어린이집은 ○○이야", "내 차 번호 기억해?", "어린이집 기억 지워 줘"),
+            "🛠 쿠비스 고치기" to listOf("홈 화면 시계를 더 크게 해 줬으면 좋겠어 (요청 목록에 적혀요)", "→ Claude 앱에서 '쿠비스 요청 처리해 줘'라고 하면 업데이트로 나와요"),
             "🔦 기기" to listOf("손전등 켜 줘", "볼륨 50으로", "배터리 얼마야?", "와이파이 설정 열어 줘"),
             "🔎 그 밖에" to listOf("오늘 뉴스 알려 줘 (웹 검색)", "로마서 8장 28절이 어떤 내용이야?", "그만 / 새 대화")
         )
@@ -518,9 +521,56 @@ class SettingsActivity : Activity() {
         for (m in mem) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, 0) }
             row.addView(txt(m, 14f, C.text), LinearLayout.LayoutParams(0, WRAP, 1f))
-            row.addView(button("지우기") { store.setMemory(store.memory() - m); refreshMemory() })
+            row.addView(button("지우기") {
+                if (MemorySync.enabled(this)) Thread {
+                    try { MemorySync.editMemory(this, "설정에서 지움") { it - m } } catch (e: Exception) { ErrorLog.add(this, "기억 지우기 실패", e.toString()) }
+                    runOnUiThread { refreshMemory() }
+                }.start() else { store.setMemory(store.memory() - m); refreshMemory() }
+            })
             memoryBox.addView(row)
         }
+    }
+
+    private fun buildMemorySync(c: LinearLayout) {
+        val status = txt(if (MemorySync.enabled(this)) "✓ 연결됨 — 기억·요청·일지가 GitHub의 kuvis-memory에 저장돼요" else "• 아직 연결 안 됨",
+            14f, if (MemorySync.enabled(this)) C.green else Color.parseColor("#FBBF24"))
+        c.addView(status)
+        c.addView(txt("1) '토큰 만들기'를 눌러 GitHub에서 토큰을 만들어요.\n" +
+                "   · Repository access: Only select repositories → kuvis-memory\n" +
+                "   · Permissions → Contents: Read and write\n" +
+                "   · 맨 아래 Generate token → 나온 글자 복사\n" +
+                "2) 아래 '붙여넣기'를 누르면 끝이에요.", 12f, C.dim).apply { setPadding(0, dp(8), 0, 0) })
+        val tokenEt = EditText(this).apply {
+            setText(MemorySync.token(this@SettingsActivity)); hint = "github_pat_..."; setHintTextColor(C.dim); setTextColor(C.text)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        c.addView(tokenEt)
+        fun saveToken(t: String) {
+            prefs.p.edit().putString("ghToken", t.trim()).putLong("lastMemPull", 0L).apply()
+            Thread {
+                val msg = try { MemorySync.test(this); MemorySync.pullMemory(this); "기억장에 연결됐어요." } catch (e: Exception) { e.message ?: "연결 실패" }
+                runOnUiThread {
+                    android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                    status.text = if (MemorySync.enabled(this)) "✓ 연결됨 — 기억·요청·일지가 GitHub의 kuvis-memory에 저장돼요" else "• 아직 연결 안 됨"
+                    if (::memoryBox.isInitialized) refreshMemory()
+                }
+            }.start()
+        }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, 0) }
+        row.addView(button("토큰 만들기", primary = !MemorySync.enabled(this)) {
+            startSafe(Intent(Intent.ACTION_VIEW, Uri.parse(
+                "https://github.com/settings/personal-access-tokens/new?name=" + Uri.encode("쿠비스 기억장") +
+                        "&description=" + Uri.encode("쿠비스가 kuvis-memory 저장소를 읽고 쓰기 위한 토큰") +
+                        "&target_name=anlf20-12&expires_in=none&contents=write")))
+        })
+        row.addView(button("붙여넣기") {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val t = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim().orEmpty()
+            if (t.startsWith("github_pat_") || t.startsWith("ghp_")) { tokenEt.setText(t); saveToken(t) }
+            else android.widget.Toast.makeText(this, "복사해 둔 글이 GitHub 토큰이 아니에요 (github_pat_ 로 시작해야 해요).", android.widget.Toast.LENGTH_LONG).show()
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+        row.addView(button("연결 확인") { saveToken(tokenEt.text.toString()) }, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+        c.addView(row)
     }
 
     private fun buildUsage(c: LinearLayout) {

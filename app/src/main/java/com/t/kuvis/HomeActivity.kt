@@ -157,6 +157,15 @@ class HomeActivity : Activity() {
         refreshAll()
         Updater.checkQuietly(this)
         Backup.autoDaily(this)
+        // 기억장 맞추기(30분마다) + 지난 날 일지 올리기
+        val mp = Prefs(this).p
+        if (MemorySync.enabled(this) && System.currentTimeMillis() - mp.getLong("lastMemPull", 0L) > 30 * 60_000L) {
+            mp.edit().putLong("lastMemPull", System.currentTimeMillis()).apply()
+            Thread {
+                try { MemorySync.pullMemory(this) } catch (e: Exception) { ErrorLog.add(this, "기억장 받기 실패", e.toString()) }
+                try { Journal.flush(this) } catch (e: Exception) { ErrorLog.add(this, "일지 실패", e.toString()) }
+            }.start()
+        }
         val pp = Prefs(this).p
         if (pp.getBoolean("crashedLastTime", false)) {
             pp.edit().putBoolean("crashedLastTime", false).apply()
