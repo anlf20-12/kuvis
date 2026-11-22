@@ -41,7 +41,7 @@ import kotlin.math.abs
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
-class AppEntry(val label: String, val pkg: String, val icon: Drawable?)
+class AppEntry(val label: String, val pkg: String, val icon: Drawable?, val category: Int = -1)
 
 /** 쿠비스 홈 화면(런처) */
 class HomeActivity : Activity() {
@@ -172,7 +172,8 @@ class HomeActivity : Activity() {
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(1, true)
+        if (drawer.visibility == View.VISIBLE && openFolder != null && search.text.isBlank()) { openFolder = null; appAdapter.filter("") }
+        else if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(1, true)
         // 런처는 닫히지 않음
     }
 
@@ -190,6 +191,7 @@ class HomeActivity : Activity() {
 
     // =====================================================================
     fun refreshAll() {
+        if (::search.isInitialized) appAdapter.filter(search.text.toString())
         calendarPage.refresh()
         centerPage.refresh()
         memoPage.refresh()
@@ -309,7 +311,10 @@ class HomeActivity : Activity() {
                 // 쿠비스 자신은 '쿠비스 설정'만 보여 줌
                 .filter { it.activityInfo.packageName != packageName || it.activityInfo.name == SettingsActivity::class.java.name }
                 .distinctBy { it.activityInfo.packageName }
-                .map { AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName, try { it.loadIcon(pm) } catch (_: Exception) { null }) }
+                .map {
+                    val cat = if (Build.VERSION.SDK_INT >= 26) it.activityInfo.applicationInfo.category else -1
+                    AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName, try { it.loadIcon(pm) } catch (_: Exception) { null }, cat)
+                }
                 .sortedWith { a, b -> col.compare(a.label, b.label) }
             runOnUiThread {
                 apps = list
@@ -360,7 +365,7 @@ class HomeActivity : Activity() {
         val dock = store.dock() ?: emptyList()
         val items = mutableListOf<String>()
         if (inDock || app.pkg in dock) items.add("고정줄에서 빼기") else items.add("고정줄에 넣기")
-        items.add("앱 정보"); items.add("삭제")
+        items.add("폴더 옮기기"); items.add("앱 정보"); items.add("삭제")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(app.label)
             .setItems(items.toTypedArray()) { _, w ->
@@ -371,6 +376,13 @@ class HomeActivity : Activity() {
                             AlertDialog.Builder(this).setMessage("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")
                                 .setPositiveButton("확인", null).show()
                         } else { store.setDock(dock + app.pkg); drawDock() }
+                    }
+                    "폴더 옮기기" -> {
+                        val order = store.folderOrder()
+                        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("${app.label} → 어느 폴더로?")
+                            .setItems(order.toTypedArray()) { _, f -> store.moveToFolder(app.pkg, order[f]); appAdapter.filter(search.text.toString()) }
+                            .show()
                     }
                     "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
                     "삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
@@ -402,6 +414,11 @@ class HomeActivity : Activity() {
             setPadding(dp(14), dp(10), dp(6), dp(10)); setOnClickListener { closeDrawer() }
         })
         d.addView(top)
+        folderTitle = txt("", 18f, C.text, bold = true).apply {
+            setPadding(dp(6), dp(14), 0, 0); visibility = View.GONE
+            setOnClickListener { openFolder = null; appAdapter.filter("") }
+        }
+        d.addView(folderTitle)
         appList = RecyclerView(this).apply {
             layoutManager = GridLayoutManager(this@HomeActivity, 4)
             adapter = this@HomeActivity.appAdapter
@@ -413,7 +430,9 @@ class HomeActivity : Activity() {
 
     private fun openDrawer() {
         if (drawer.visibility == View.VISIBLE) return
+        openFolder = null
         search.setText("")
+        appAdapter.filter("")
         drawer.visibility = View.VISIBLE
         drawer.translationY = drawer.height.toFloat().coerceAtLeast(dpf(400f))
         drawer.animate().translationY(0f).setDuration(220).start()
@@ -427,14 +446,43 @@ class HomeActivity : Activity() {
             .withEndAction { drawer.visibility = View.GONE }.start()
     }
 
-    private inner class AppAdapter : RecyclerView.Adapter<AppAdapter.VH>() {
-        private var shown: List<AppEntry> = emptyList()
+    private var openFolder: String? = null
+    private lateinit var folderTitle: TextView
 
-        inner class VH(val box: LinearLayout, val icon: ImageView, val label: TextView) : RecyclerView.ViewHolder(box)
+    private fun renameFolderDialog(name: String) {
+        val et = EditText(this).apply { setText(name); setSelection(name.length) }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("폴더 이름 바꾸기")
+            .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
+            .setPositiveButton("바꾸기") { _, _ ->
+                val n = et.text.toString().trim()
+                if (n.isNotEmpty() && n !in store.folderOrder()) { store.renameFolder(name, n); if (openFolder == name) openFolder = n }
+                appAdapter.filter(search.text.toString())
+            }
+            .setNegativeButton("취소", null).show()
+    }
+
+    /** 서랍 칸: 폴더 또는 앱 */
+    private class Cell(val folder: String?, val apps: List<AppEntry>, val app: AppEntry?)
+
+    private inner class AppAdapter : RecyclerView.Adapter<AppAdapter.VH>() {
+        private var shown: List<Cell> = emptyList()
+
+        inner class VH(val box: LinearLayout, val icon: FrameLayout, val label: TextView) : RecyclerView.ViewHolder(box)
 
         fun filter(q: String) {
             val k = q.replace(" ", "").lowercase()
-            shown = if (k.isEmpty()) apps else apps.filter { it.label.replace(" ", "").lowercase().contains(k) }
+            val assign = if (apps.isEmpty()) emptyMap() else Folders.assign(this@HomeActivity, apps)
+            shown = when {
+                k.isNotEmpty() -> apps.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
+                openFolder != null -> apps.filter { assign[it.pkg] == openFolder }.map { Cell(null, emptyList(), it) }
+                else -> store.folderOrder().map { f -> Cell(f, apps.filter { assign[it.pkg] == f }, null) }
+            }
+            if (::folderTitle.isInitialized) {
+                val f = openFolder
+                folderTitle.visibility = if (f != null && k.isEmpty()) View.VISIBLE else View.GONE
+                folderTitle.text = "‹  $f"
+            }
             @Suppress("NotifyDataSetChanged")
             notifyDataSetChanged()
         }
@@ -447,8 +495,8 @@ class HomeActivity : Activity() {
                 setPadding(dp(4), dp(10), dp(4), dp(10))
                 layoutParams = RecyclerView.LayoutParams(MATCH, WRAP)
             }
-            val icon = ImageView(this@HomeActivity)
-            box.addView(icon, LinearLayout.LayoutParams(dp(52), dp(52)))
+            val icon = FrameLayout(this@HomeActivity)
+            box.addView(icon, LinearLayout.LayoutParams(dp(56), dp(56)))
             val label = TextView(this@HomeActivity).apply {
                 textSize = 12f; setTextColor(C.text); gravity = Gravity.CENTER
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
@@ -459,11 +507,37 @@ class HomeActivity : Activity() {
         }
 
         override fun onBindViewHolder(h: VH, position: Int) {
-            val a = shown[position]
-            h.icon.setImageDrawable(a.icon)
-            h.label.text = a.label
-            h.box.setOnClickListener { launch(a.pkg); closeDrawer() }
-            h.box.setOnLongClickListener { appMenu(a, inDock = false); true }
+            val c = shown[position]
+            h.icon.removeAllViews()
+            val app = c.app
+            if (app != null) {
+                h.icon.background = null
+                h.icon.addView(ImageView(this@HomeActivity).apply { setImageDrawable(app.icon) },
+                    FrameLayout.LayoutParams(MATCH, MATCH))
+                h.label.text = app.label
+                h.box.setOnClickListener { launch(app.pkg); closeDrawer() }
+                h.box.setOnLongClickListener { appMenu(app, inDock = false); true }
+            } else {
+                val name = c.folder ?: ""
+                // 폴더: 앞의 앱 4개 아이콘을 2x2로
+                h.icon.background = rounded(Color.argb(90, 255, 255, 255), dpf(16f))
+                val grid = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
+                for (r in 0 until 2) {
+                    val row = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.HORIZONTAL }
+                    for (col in 0 until 2) {
+                        val iv = ImageView(this@HomeActivity).apply {
+                            setImageDrawable(c.apps.getOrNull(r * 2 + col)?.icon?.constantState?.newDrawable()?.mutate())
+                            setPadding(dp(2), dp(2), dp(2), dp(2))
+                        }
+                        row.addView(iv, LinearLayout.LayoutParams(0, dp(22), 1f))
+                    }
+                    grid.addView(row)
+                }
+                h.icon.addView(grid, FrameLayout.LayoutParams(MATCH, MATCH))
+                h.label.text = "$name ${c.apps.size}"
+                h.box.setOnClickListener { openFolder = name; filter("") ; appList.scrollToPosition(0) }
+                h.box.setOnLongClickListener { renameFolderDialog(name); true }
+            }
         }
     }
 }

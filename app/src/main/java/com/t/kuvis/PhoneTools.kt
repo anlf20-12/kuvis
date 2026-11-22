@@ -162,6 +162,15 @@ class PhoneTools(private val ctx: Context) {
                 JSONObject().put("apps", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))
                     .put("description", "앱 이름 또는 패키지명 목록")),
                 listOf("apps")))
+            .put(tool("list_folders", "전체 앱 서랍의 폴더와 각 폴더에 든 앱 목록.", JSONObject()))
+            .put(tool("move_apps_to_folder", "앱들을 전체 앱 서랍의 한 폴더로 옮긴다. 없는 폴더 이름이면 새로 만든다.",
+                JSONObject().put("apps", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))
+                    .put("description", "앱 이름 또는 패키지명 목록"))
+                    .put("folder", p("string", "폴더 이름")),
+                listOf("apps", "folder")))
+            .put(tool("rename_folder", "앱 서랍 폴더 이름을 바꾼다.",
+                JSONObject().put("from", p("string", "지금 이름")).put("to", p("string", "새 이름")), listOf("from", "to")))
+            .put(tool("resort_folders", "모든 앱을 이름을 보고 폴더에 처음부터 다시 자동 정리한다. 사용자가 손으로 옮긴 것도 다시 정해지니 확인받은 뒤에만.", JSONObject()))
             .put(tool("show_page", "홈 화면에서 특정 페이지를 보여 준다.",
                 JSONObject().put("page", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("calendar").put("home").put("memo"))),
@@ -232,6 +241,26 @@ class PhoneTools(private val ctx: Context) {
         "get_weather" -> Weather.get(ctx)?.let { Weather.summary(it) } ?: "날씨를 가져오지 못함"
         "set_dock" -> setDock(a.getJSONArray("apps"))
         "show_page" -> { Bus.showPage(a.getString("page")); "보여 줌" }
+        "list_folders" -> {
+            val apps = entries()
+            val assign = Folders.assign(ctx, apps)
+            store.folderOrder().joinToString("\n") { f ->
+                val names = apps.filter { assign[it.pkg] == f }.map { it.label }
+                "$f (${names.size}): " + names.joinToString(", ")
+            }
+        }
+        "move_apps_to_folder" -> {
+            val arr = a.getJSONArray("apps"); val folder = a.getString("folder").trim()
+            val moved = mutableListOf<String>(); val failed = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val q = arr.getString(i)
+                try { store.moveToFolder(resolvePkg(q), folder); moved.add(q) } catch (_: Exception) { failed.add(q) }
+            }
+            Bus.changed()
+            "옮김: ${moved.joinToString(", ")} → $folder" + (if (failed.isNotEmpty()) " / 못 찾음: ${failed.joinToString(", ")}" else "")
+        }
+        "rename_folder" -> { val ok = store.renameFolder(a.getString("from"), a.getString("to").trim()); Bus.changed(); if (ok) "바꿈" else "그 폴더 없음" }
+        "resort_folders" -> { Folders.resortAll(ctx, entries()); Bus.changed(); "다시 정리함: " + store.folderOrder().joinToString(", ") }
         else -> throw IllegalArgumentException("모르는 도구: $name")
     }
 
@@ -398,6 +427,14 @@ class PhoneTools(private val ctx: Context) {
         return ris.map { AppItem(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
             .distinctBy { it.pkg }
             .filter { it.pkg != ctx.packageName }
+    }
+
+    private fun entries(): List<AppEntry> {
+        val pm = ctx.packageManager
+        return launcherApps().map { a ->
+            val cat = if (Build.VERSION.SDK_INT >= 26) try { pm.getApplicationInfo(a.pkg, 0).category } catch (_: Exception) { -1 } else -1
+            AppEntry(a.label, a.pkg, null, cat)
+        }
     }
 
     private fun resolvePkg(q: String): String {

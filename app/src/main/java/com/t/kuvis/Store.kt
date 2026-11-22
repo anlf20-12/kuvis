@@ -100,6 +100,10 @@ class Store(ctx: Context) {
         p.edit().putString("dock", JSONArray(pkgs.take(5)).toString()).apply()
     }
 
+    // 다른 파일(폴더 정리 등)에서 쓰는 단순 저장
+    fun rawGet(k: String): String? = synchronized(lock) { p.getString(k, null) }
+    fun rawPut(k: String, v: String) = synchronized(lock) { p.edit().putString(k, v).apply() }
+
     /** 백업용 */
     fun exportJson(): String = synchronized(lock) {
         JSONObject()

@@ -355,7 +355,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             "전화 걸기, 문자 보내기, 일정·할 일·메모 지우기는 실행 전에 무엇을 하는지 말하고 '할까요?'로 확인받는다. 사용자가 그러라고 하면 그때 실행한다.",
             "일정·할 일·메모 추가, 완료 표시, 알람·타이머, 앱 열기, 손전등 같은 건 확인 없이 바로 한다. 날짜와 시간은 아래 현재 시각을 기준으로 계산한다.",
             "날씨는 get_weather를 먼저 쓰고, 그걸로 모자랄 때만 웹 검색을 쓴다.",
-            "앱 정리: list_apps(last_used)로 오래 안 쓴 앱을 찾아 몇 개 말해 주고, 지울지 물은 뒤 uninstall_app으로 삭제 창을 띄운다.",
+            "앱 정리: 전체 앱 서랍(홈에서 위로 쓸기)은 폴더로 나뉘어 있다. 폴더 옮기기·이름 바꾸기는 list_folders, move_apps_to_folder, rename_folder로 바로 한다. 안 쓰는 앱 지우기는 list_apps(last_used)로 찾아 말해 주고, 지울지 물은 뒤 uninstall_app으로 삭제 창을 띄운다.",
             "성경 구절은 개역개정 본문이 확실할 때만 그대로 인용하고, 확실하지 않으면 장절과 내용 요약만 말한다.",
             "현재 시각: ${fmt.format(Date())} (한국)."
         )
