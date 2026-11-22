@@ -129,6 +129,7 @@ class SettingsActivity : Activity() {
             "memory" -> "기억장 (Claude 앱과 함께 쓰기)"
             "abilities" -> "쿠비스가 할 수 있는 일"
             "update" -> "기타"
+            "hidden" -> "숨긴 앱"
             else -> return
         }
         val v = anchors[key] ?: return

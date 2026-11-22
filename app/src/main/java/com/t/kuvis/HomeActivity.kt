@@ -3,40 +3,49 @@ package com.t.kuvis
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.role.RoleManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.RenderEffect
+import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
+import android.speech.RecognizerIntent
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import java.text.Collator
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -47,21 +56,45 @@ class AppEntry(val label: String, val pkg: String, val icon: Drawable?, val cate
 class HomeActivity : Activity() {
 
     private lateinit var store: Store
+    private lateinit var root: FrameLayout
+    private lateinit var mainContent: LinearLayout
     private lateinit var pager: ViewPager2
-    private lateinit var calendarPage: CalendarPage
-    private lateinit var centerPage: CenterPage
-    private lateinit var memoPage: MemoPage
+    private lateinit var grids: List<GridPageView>
     private lateinit var dots: LinearLayout
     private lateinit var dockRow: LinearLayout
-    private lateinit var drawer: LinearLayout
+    private lateinit var overlay: FrameLayout
+    private lateinit var deleteBar: TextView
+    private val main = Handler(Looper.getMainLooper())
+
+    // 쿠비스 위젯 (한 개씩만 있음)
+    private lateinit var calendarW: CalendarPage
+    private lateinit var weatherW: WeatherWidget
+    private lateinit var clockW: ClockWidget
+    private lateinit var todoW: TodoWidget
+    private lateinit var memoW: MemoPage
+    private lateinit var kuvisW: KuvisButtonWidget
+
+    // 앱 서랍
+    private lateinit var drawer: FrameLayout
+    private lateinit var drawerColumn: LinearLayout
     private lateinit var search: EditText
     private lateinit var appList: RecyclerView
-    private val appAdapter = AppAdapter()
-    private var apps: List<AppEntry> = emptyList()
-    // 손가락 따라가는 쓸기
+    private val appAdapter = AppAdapter(inFolder = false)
+    var apps: List<AppEntry> = emptyList(); private set
+
+    // 폴더 창
+    private lateinit var folderLayer: FrameLayout
+    private lateinit var folderTitle: TextView
+    private lateinit var folderList: RecyclerView
+    private val folderAdapter = AppAdapter(inFolder = true)
+    private var openFolder: String? = null
+
+    // 쓸기
     private var touchSlop = 16
     private var downX = 0f
     private var downY = 0f
+    private var lastRawX = 0f
+    private var lastRawY = 0f
     private var decided = false
     private var dragMode = 0 // 0 없음, 1 앱 창 올리기, 2 앱 창 내리기, 3 알림창
     private var startInDock = false
@@ -80,8 +113,8 @@ class HomeActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
+        touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
 
-        // 상태 표시줄·내비게이션 바 뒤까지 배경 사진이 보이게
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
@@ -89,47 +122,54 @@ class HomeActivity : Activity() {
         window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
 
-        val root = FrameLayout(this).apply { fitsSystemWindows = true }
+        root = FrameLayout(this).apply { fitsSystemWindows = true }
 
-        // 페이지 + 점 + 고정줄
-        val main = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        calendarPage = CalendarPage(this)
-        centerPage = CenterPage(this)
-        memoPage = MemoPage(this)
+        calendarW = CalendarPage(this)
+        weatherW = WeatherWidget(this)
+        clockW = ClockWidget(this)
+        todoW = TodoWidget(this)
+        memoW = MemoPage(this)
+        kuvisW = KuvisButtonWidget(this)
+
+        mainContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        grids = (0 until HomeGrid.PAGES).map { GridPageView(this, it).apply { setPadding(dp(6), dp(4), dp(6), dp(4)) } }
         pager = ViewPager2(this).apply {
-            adapter = PagesAdapter(listOf(calendarPage, centerPage, memoPage))
+            adapter = PagesAdapter(grids)
             offscreenPageLimit = 2
         }
-        main.addView(pager, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        mainContent.addView(pager, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         dots = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        main.addView(dots, LinearLayout.LayoutParams(MATCH, dp(18)))
+        mainContent.addView(dots, LinearLayout.LayoutParams(MATCH, dp(18)))
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) { drawDots(position) }
         })
-
-        // 위로 쓸어 올리기 손잡이
-        main.addView(txt("⌃", 16f, Color.argb(170, 255, 255, 255), gravity = Gravity.CENTER).apply {
+        mainContent.addView(txt("⌃", 16f, Color.argb(170, 255, 255, 255), gravity = Gravity.CENTER).apply {
             setOnClickListener { openDrawer() }
         }, LinearLayout.LayoutParams(MATCH, dp(18)))
-
         dockRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
             setPadding(dp(8), dp(4), dp(8), dp(10))
         }
-        main.addView(dockRow, LinearLayout.LayoutParams(MATCH, WRAP))
-        root.addView(main, FrameLayout.LayoutParams(MATCH, MATCH))
+        mainContent.addView(dockRow, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(mainContent, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // 전체 앱
         drawer = buildDrawer()
         drawer.visibility = View.GONE
         root.addView(drawer, FrameLayout.LayoutParams(MATCH, MATCH))
 
+        // 끌기용 맨 위 층 (떠 있는 아이콘·삭제 칸·크기 손잡이)
+        overlay = FrameLayout(this).apply { isClickable = false }
+        deleteBar = txt("🗑  여기에 놓으면 홈에서 빠져요", 15f, Color.WHITE, bold = true, gravity = Gravity.CENTER).apply {
+            background = rounded(Color.argb(200, 185, 28, 28), dpf(18f))
+            visibility = View.GONE
+        }
+        overlay.addView(deleteBar, FrameLayout.LayoutParams(MATCH, dp(56)).apply { setMargins(dp(24), dp(8), dp(24), 0) })
+        root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+
         setContentView(root)
         pager.setCurrentItem(1, false)
         drawDots(1)
-
-        touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop
 
         Bus.onChanged(onChanged)
         Bus.onPage(onPage)
@@ -157,7 +197,6 @@ class HomeActivity : Activity() {
         refreshAll()
         Updater.checkQuietly(this)
         Backup.autoDaily(this)
-        // 기억장 맞추기(30분마다) + 지난 날 일지 올리기
         val mp = Prefs(this).p
         if (MemorySync.enabled(this) && System.currentTimeMillis() - mp.getLong("lastMemPull", 0L) > 30 * 60_000L) {
             mp.edit().putLong("lastMemPull", System.currentTimeMillis()).apply()
@@ -166,9 +205,8 @@ class HomeActivity : Activity() {
                 try { Journal.flush(this) } catch (e: Exception) { ErrorLog.add(this, "일지 실패", e.toString()) }
             }.start()
         }
-        val pp = Prefs(this).p
-        if (pp.getBoolean("crashedLastTime", false)) {
-            pp.edit().putBoolean("crashedLastTime", false).apply()
+        if (mp.getBoolean("crashedLastTime", false)) {
+            mp.edit().putBoolean("crashedLastTime", false).apply()
             AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("쿠비스가 멈췄었어요")
                 .setMessage("오류 기록을 Claude에게 보내 주시면 고칠 수 있어요.")
@@ -180,135 +218,61 @@ class HomeActivity : Activity() {
         }
         Thread {
             val w = Weather.get(this)
-            runOnUiThread { centerPage.setWeather(w) }
+            runOnUiThread { weatherW.setWeather(w) }
         }.start()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        endDrag(cancel = true)
+        endResize()
     }
 
     /** 홈 버튼을 다시 누르면 가운데로 */
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
+        endResize()
         if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(1, true)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
-        if (drawer.visibility == View.VISIBLE && openFolder != null && search.text.isBlank()) { openFolder = null; appAdapter.filter("") }
-        else if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(1, true)
-        // 런처는 닫히지 않음
-    }
-
-    private fun currentPage(): View = listOf(calendarPage, centerPage, memoPage)[pager.currentItem]
-
-    private fun drawerHeight(): Float = (if (drawer.height > 0) drawer.height else window.decorView.height).toFloat()
-
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = ev.rawX; downY = ev.rawY; decided = false; dragMode = 0
-                vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(ev)
-                val loc = IntArray(2); dockRow.getLocationOnScreen(loc)
-                startInDock = ev.rawY >= loc[1] - dp(40)
-            }
-            MotionEvent.ACTION_MOVE -> {
-                vt?.addMovement(ev)
-                val dx = ev.rawX - downX
-                val dy = ev.rawY - downY
-                if (!decided) {
-                    if (abs(dy) > touchSlop * 1.5f && abs(dy) > abs(dx) * 1.3f) {
-                        decided = true
-                        if (drawer.visibility != View.VISIBLE) {
-                            val page = currentPage()
-                            if (dy < 0 && (startInDock || !page.canScrollVertically(1))) {
-                                dragMode = 1
-                                prepareDrawer()
-                                drawer.translationY = drawerHeight()
-                                drawer.visibility = View.VISIBLE
-                            } else if (dy > 0 && !page.canScrollVertically(-1)) {
-                                dragMode = 3
-                                expandNotifications()
-                            }
-                        } else if (dy > 0 && !appList.canScrollVertically(-1)) {
-                            dragMode = 2
-                            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
-                                .hideSoftInputFromWindow(search.windowToken, 0)
-                        }
-                        if (dragMode != 0) {
-                            // 아래 화면(페이지 스크롤 등)이 이 손가락을 놓게 함
-                            val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
-                            super.dispatchTouchEvent(c); c.recycle()
-                        }
-                    } else if (abs(dx) > touchSlop * 1.5f) {
-                        decided = true // 옆으로 넘기기 → 페이지 이동
-                    }
-                }
-                val h = drawerHeight()
-                when (dragMode) {
-                    1 -> { drawer.translationY = (h + dy).coerceIn(0f, h); return true }
-                    2 -> { drawer.translationY = dy.coerceIn(0f, h); return true }
-                    3 -> return true
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                vt?.addMovement(ev)
-                if (dragMode == 1 || dragMode == 2) {
-                    vt?.computeCurrentVelocity(1000)
-                    val vy = vt?.yVelocity ?: 0f
-                    val h = drawerHeight()
-                    val open = when {
-                        vy < -700 -> true
-                        vy > 700 -> false
-                        else -> drawer.translationY < h / 2
-                    }
-                    settleDrawer(open)
-                    dragMode = 0
-                    return true
-                }
-                if (dragMode == 3) { dragMode = 0; return true }
-            }
+        when {
+            resize != null -> endResize()
+            openFolder != null -> closeFolder()
+            drawer.visibility == View.VISIBLE -> closeDrawer()
+            else -> pager.setCurrentItem(1, true)
         }
-        return super.dispatchTouchEvent(ev)
-    }
-
-    /** 손을 뗀 뒤 부드럽게 끝까지 */
-    private fun settleDrawer(open: Boolean) {
-        val h = drawerHeight()
-        if (open) {
-            drawer.visibility = View.VISIBLE
-            drawer.animate().translationY(0f).setDuration(180)
-                .setInterpolator(android.view.animation.DecelerateInterpolator()).withEndAction(null).start()
-        } else {
-            drawer.animate().translationY(h).setDuration(200)
-                .setInterpolator(android.view.animation.DecelerateInterpolator())
-                .withEndAction { drawer.visibility = View.GONE; openFolder = null }.start()
-        }
-    }
-
-    private fun prepareDrawer() {
-        openFolder = null
-        search.setText("")
-        appAdapter.filter("")
-        appList.scrollToPosition(0)
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(code, perms, results)
         refreshAll()
-        Thread { val w = Weather.get(this, 0L); runOnUiThread { centerPage.setWeather(w) } }.start()
+        Thread { val w = Weather.get(this, 0L); runOnUiThread { weatherW.setWeather(w) } }.start()
         if (Prefs(this).key.isBlank()) SettingsActivity.open(this)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 51 && resultCode == RESULT_OK) {
+            val t = data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull() ?: return
+            search.setText(t.replace(" 열어 줘", "").replace(" 열어줘", "").trim())
+        }
     }
 
     // =====================================================================
     fun refreshAll() {
-        if (::search.isInitialized) appAdapter.filter(search.text.toString())
-        calendarPage.refresh()
-        centerPage.refresh()
-        memoPage.refresh()
+        calendarW.refresh(); weatherW.refresh(); todoW.refresh(); memoW.refresh()
+        renderGrids()
         drawDock()
+        if (::search.isInitialized) appAdapter.filter(search.text.toString())
+        openFolder?.let { folderAdapter.showFolder(it) }
     }
 
     private fun drawDots(sel: Int) {
         dots.removeAllViews()
-        for (i in 0 until 3) {
+        for (i in 0 until HomeGrid.PAGES) {
             dots.addView(View(this).apply {
                 background = rounded(if (i == sel) Color.WHITE else Color.argb(110, 255, 255, 255), dpf(4f))
             }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { leftMargin = dp(4); rightMargin = dp(4) })
@@ -350,63 +314,422 @@ class HomeActivity : Activity() {
         } catch (_: Exception) {}
     }
 
+    fun showMenu() = SettingsActivity.open(this)
+
+    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
     // =====================================================================
-    // 설정 메뉴 (가운데 페이지 ⚙)
-    fun showMenu() {
-        SettingsActivity.open(this)
+    // 홈 바둑판
+    private fun viewFor(item: GridItem): View = when (item.kind) {
+        "calendar" -> calendarW
+        "weather" -> weatherW
+        "clock" -> clockW
+        "todo" -> todoW
+        "memo" -> memoW
+        "kuvis" -> kuvisW
+        else -> {
+            val app = apps.firstOrNull { it.pkg == item.pkg }
+            val icon = app?.icon ?: try { packageManager.getApplicationIcon(item.pkg) } catch (_: Exception) { null }
+            appIconView(this, icon, app?.label ?: item.pkg).apply { setOnClickListener { launch(item.pkg) } }
+        }
     }
 
-    @Suppress("unused")
-    private fun oldMenu() {
-        val items = arrayOf(
-            "쿠비스 설정 (API 키·모델·목소리)",
-            "쿠비스를 기본 홈 화면으로",
-            "측면 버튼으로 부르기 설정",
-            "할 일·메모 백업 내보내기",
-            "휴대폰 설정 열기"
-        )
+    private fun renderGrids() {
+        for (g in grids) g.setItems(HomeGrid.items(this, g.page)) { viewFor(it) }
+    }
+
+    fun canStartGridGesture() = drawer.visibility != View.VISIBLE && drag == null && resize == null && dragMode == 0
+
+    /** 바둑판의 위젯·아이콘을 길게 누름 → 끌기 시작 (안 움직이고 떼면 메뉴) */
+    fun onGridItemLongPress(grid: GridPageView, item: GridItem, rawX: Float, rawY: Float) {
+        val v = grid.viewOf(item) ?: return
+        val loc = IntArray(2); v.getLocationOnScreen(loc)
+        startDrag(item, grid.page, snapshot(v), v.width, v.height, rawX - loc[0], rawY - loc[1], rawX, rawY, v) {
+            gridItemMenu(grid.page, item)
+        }
+    }
+
+    /** 빈 곳 길게 누름 → 홈 메뉴 */
+    fun onGridEmptyLongPress(grid: GridPageView, cell: Pair<Int, Int>) {
+        val missing = HomeGrid.KINDS.keys.filter { it !in HomeGrid.placedKinds(this) }
+        val items = mutableListOf<String>()
+        if (missing.isNotEmpty()) items.add("쿠비스 위젯 추가")
+        items.add("앱 아이콘 추가"); items.add("배경화면 바꾸기"); items.add("쿠비스 설정"); items.add("홈 화면을 처음 배치로")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setItems(items) { _, w ->
-                when (w) {
-                    0 -> SettingsActivity.open(this)
-                    1 -> setAsHome()
-                    2 -> assistGuide()
-                    3 -> safeStart(Intent.createChooser(
-                        Intent(Intent.ACTION_SEND).setType("text/plain")
-                            .putExtra(Intent.EXTRA_SUBJECT, "쿠비스 백업")
-                            .putExtra(Intent.EXTRA_TEXT, store.exportJson()), "백업 보낼 곳"))
-                    4 -> safeStart(Intent(Settings.ACTION_SETTINGS))
+            .setItems(items.toTypedArray()) { _, w ->
+                when (items[w]) {
+                    "쿠비스 위젯 추가" -> AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle("어떤 위젯을 넣을까요?")
+                        .setItems(missing.map { HomeGrid.label(it) }.toTypedArray()) { _, k -> addKuvisWidget(grid.page, missing[k], cell) }
+                        .show()
+                    "앱 아이콘 추가" -> {
+                        val visible = visibleApps()
+                        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                            .setTitle("홈에 놓을 앱")
+                            .setItems(visible.map { it.label }.toTypedArray()) { _, k -> addAppToHome(grid.page, visible[k].pkg, cell) }
+                            .show()
+                    }
+                    "배경화면 바꾸기" -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "배경화면"))
+                    "쿠비스 설정" -> SettingsActivity.open(this)
+                    "홈 화면을 처음 배치로" -> AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setMessage("홈 화면 3장을 처음 배치로 되돌릴까요? 홈에 꺼내 둔 앱 아이콘은 빠져요. (앱은 지워지지 않아요)")
+                        .setPositiveButton("되돌리기") { _, _ -> HomeGrid.resetAll(this); renderGrids() }
+                        .setNegativeButton("취소", null).show()
                 }
             }.show()
     }
 
-    private fun setAsHome() {
-        if (Build.VERSION.SDK_INT >= 29) {
-            val rm = getSystemService(RoleManager::class.java)
-            if (rm != null && rm.isRoleAvailable(RoleManager.ROLE_HOME) && !rm.isRoleHeld(RoleManager.ROLE_HOME)) {
-                @Suppress("DEPRECATION")
-                startActivityForResult(rm.createRequestRoleIntent(RoleManager.ROLE_HOME), 7)
-                return
+    private fun addKuvisWidget(page: Int, kind: String, cell: Pair<Int, Int>) {
+        val list = HomeGrid.items(this, page)
+        val (dw, dh) = HomeGrid.KINDS[kind]!!.second
+        val (mw, mh) = HomeGrid.minSize(kind)
+        // 누른 자리 → 첫 빈자리, 큰 크기부터 작은 크기까지
+        for (h in dh downTo mh) for (w in dw downTo mw) {
+            val spot = if (HomeGrid.isFree(list, cell.first, cell.second, w, h)) cell else HomeGrid.firstFree(list, w, h)
+            if (spot != null) {
+                HomeGrid.save(this, page, list + GridItem(kind, x = spot.first, y = spot.second, w = w, h = h))
+                renderGrids(); return
             }
         }
-        safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+        toast("이 화면에 빈 칸이 모자라요. 다른 걸 옮기거나 줄여 주세요.")
     }
 
-    private fun assistGuide() {
+    private fun addAppToHome(page: Int, pkg: String, cell: Pair<Int, Int>?) {
+        val list = HomeGrid.items(this, page)
+        if (list.any { it.kind == "app" && it.pkg == pkg }) { toast("이미 이 화면에 있어요."); return }
+        val spot = cell?.takeIf { HomeGrid.isFree(list, it.first, it.second, 1, 1) } ?: HomeGrid.firstFree(list, 1, 1)
+        if (spot == null) { toast("이 화면에 빈 칸이 없어요."); return }
+        HomeGrid.save(this, page, list + GridItem("app", pkg, spot.first, spot.second, 1, 1))
+        renderGrids()
+    }
+
+    private fun gridItemMenu(page: Int, item: GridItem) {
+        val opts = mutableListOf<String>()
+        if (item.kind != "app") opts.add("크기 조절")
+        opts.add("홈에서 빼기")
+        if (item.kind == "app") { opts.add("숨기기"); opts.add("앱 정보"); opts.add("앱 삭제") }
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("측면 버튼으로 쿠비스 부르기")
-            .setMessage(
-                "1) 다음 화면의 '디지털 어시스턴트 앱'(또는 '기기 지원 앱')에서 쿠비스를 고르세요.\n\n" +
-                "2) 휴대폰 설정 > 유용한 기능(고급 기능) > 측면 버튼 > '길게 누르기'를 '디지털 어시스턴트 깨우기'로 바꾸세요.\n\n" +
-                "그러면 어느 화면에서든 측면 버튼을 길게 누르면 쿠비스가 떠요."
-            )
-            .setPositiveButton("1번 화면 열기") { _, _ ->
-                try { startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) }
-                catch (_: Exception) { safeStart(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
+            .setTitle(if (item.kind == "app") apps.firstOrNull { it.pkg == item.pkg }?.label ?: item.pkg else HomeGrid.label(item.kind))
+            .setItems(opts.toTypedArray()) { _, w ->
+                when (opts[w]) {
+                    "크기 조절" -> beginResize(page, item)
+                    "홈에서 빼기" -> {
+                        HomeGrid.save(this, page, HomeGrid.items(this, page).filter { it != item })
+                        renderGrids()
+                        if (item.kind != "app") toast("빈 곳을 길게 눌러 '쿠비스 위젯 추가'로 다시 넣을 수 있어요.")
+                    }
+                    "숨기기" -> hideApp(item.pkg)
+                    "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${item.pkg}")))
+                    "앱 삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${item.pkg}")))
+                }
+            }.show()
+    }
+
+    private fun snapshot(v: View): Bitmap? = try {
+        Bitmap.createBitmap(v.width.coerceAtLeast(1), v.height.coerceAtLeast(1), Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
+    } catch (_: Exception) { null }
+
+    // ---------- 끌기 ----------
+    private class Drag(
+        val item: GridItem, val fromPage: Int?, val float: ImageView, val grabX: Float, val grabY: Float,
+        val startX: Float, val startY: Float, val source: View?, val onTap: () -> Unit
+    ) {
+        var moved = false
+        var cancelSent = false
+        var target: Triple<Int, Int, Boolean>? = null
+    }
+
+    private var drag: Drag? = null
+    private var flip: Runnable? = null
+
+    private fun startDrag(item: GridItem, fromPage: Int?, bmp: Bitmap?, w: Int, h: Int, grabX: Float, grabY: Float,
+                          rawX: Float, rawY: Float, source: View?, icon: Drawable? = null, onTap: () -> Unit) {
+        val iv = ImageView(this).apply {
+            if (bmp != null) setImageBitmap(bmp) else setImageDrawable(icon)
+            alpha = 0f; scaleX = 1.05f; scaleY = 1.05f
+            elevation = dpf(12f)
+        }
+        overlay.addView(iv, FrameLayout.LayoutParams(w, h))
+        drag = Drag(item, fromPage, iv, grabX, grabY, rawX, rawY, source, onTap)
+        pager.isUserInputEnabled = false
+        positionFloat(rawX, rawY)
+    }
+
+    private fun positionFloat(rawX: Float, rawY: Float) {
+        val d = drag ?: return
+        val loc = IntArray(2); overlay.getLocationOnScreen(loc)
+        d.float.x = rawX - d.grabX - loc[0]
+        d.float.y = rawY - d.grabY - loc[1]
+    }
+
+    private fun handleDrag(ev: MotionEvent): Boolean {
+        val d = drag ?: return false
+        if (!d.cancelSent) {
+            // 밑에 있는 위젯·목록이 이 손가락을 놓게
+            d.cancelSent = true
+            val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
+            super.dispatchTouchEvent(c); c.recycle()
+        }
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                if (!d.moved && hypot(ev.rawX - d.startX, ev.rawY - d.startY) > touchSlop * 2) {
+                    d.moved = true
+                    d.float.alpha = 0.9f
+                    d.source?.alpha = 0.25f
+                    if (d.fromPage == null) hideDrawerNow() else deleteBar.visibility = View.VISIBLE
+                }
+                if (d.moved) {
+                    positionFloat(ev.rawX, ev.rawY)
+                    updateTarget(ev.rawX, ev.rawY)
+                    edgeFlip(ev.rawX)
+                }
             }
-            .setNeutralButton("2번 화면 열기") { _, _ -> safeStart(Intent(Settings.ACTION_SETTINGS)) }
-            .setNegativeButton("닫기", null)
-            .show()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!d.moved) { endDrag(cancel = true); if (ev.actionMasked == MotionEvent.ACTION_UP) d.onTap() }
+                else drop(ev.rawX, ev.rawY)
+            }
+        }
+        return true
+    }
+
+    private fun overDelete(rawY: Float): Boolean {
+        if (deleteBar.visibility != View.VISIBLE) return false
+        val loc = IntArray(2); deleteBar.getLocationOnScreen(loc)
+        return rawY <= loc[1] + deleteBar.height
+    }
+
+    private fun updateTarget(rawX: Float, rawY: Float) {
+        val d = drag ?: return
+        val page = pager.currentItem
+        val g = grids[page]
+        grids.filter { it !== g }.forEach { it.hideOutline() }
+        if (overDelete(rawY)) { g.hideOutline(); d.target = null; deleteBar.alpha = 1f; return }
+        deleteBar.alpha = 0.8f
+        val loc = IntArray(2); g.getLocationOnScreen(loc)
+        val left = rawX - d.grabX - loc[0] - g.paddingLeft
+        val top = rawY - d.grabY - loc[1] - g.paddingTop
+        val x = (left / g.cellW).roundToInt().coerceIn(0, HomeGrid.COLS - d.item.w)
+        val y = (top / g.cellH).roundToInt().coerceIn(0, HomeGrid.ROWS - d.item.h)
+        val list = HomeGrid.items(this, page)
+        val samePage = d.fromPage == page
+        var ok = HomeGrid.isFree(list, x, y, d.item.w, d.item.h, if (samePage) d.item else null)
+        if (ok && !samePage && d.item.kind == "app" && list.any { it.kind == "app" && it.pkg == d.item.pkg }) ok = false
+        d.target = Triple(x, y, ok)
+        g.showOutline(x, y, d.item.w, d.item.h, ok)
+    }
+
+    /** 화면 가장자리에 잠깐 머물면 옆 장으로 */
+    private fun edgeFlip(rawX: Float) {
+        val edge = dp(28)
+        val w = root.width
+        val dir = when { rawX < edge -> -1; rawX > w - edge -> 1; else -> 0 }
+        if (dir == 0) { flip?.let { main.removeCallbacks(it) }; flip = null; return }
+        if (flip != null) return
+        flip = Runnable {
+            flip = null
+            val to = (pager.currentItem + dir).coerceIn(0, HomeGrid.PAGES - 1)
+            if (to != pager.currentItem) { grids.forEach { it.hideOutline() }; pager.setCurrentItem(to, true) }
+        }.also { main.postDelayed(it, 600) }
+    }
+
+    private fun drop(rawX: Float, rawY: Float) {
+        val d = drag ?: return
+        val page = pager.currentItem
+        if (overDelete(rawY) && d.fromPage != null) {
+            HomeGrid.save(this, d.fromPage, HomeGrid.items(this, d.fromPage).filter { it != d.item })
+            if (d.item.kind != "app") toast("빈 곳을 길게 눌러 '쿠비스 위젯 추가'로 다시 넣을 수 있어요.")
+        } else {
+            val t = d.target
+            if (t != null && t.third) {
+                val moved = d.item.copy(x = t.first, y = t.second)
+                if (d.fromPage == page) {
+                    HomeGrid.save(this, page, HomeGrid.items(this, page).map { if (it == d.item) moved else it })
+                } else {
+                    if (d.fromPage != null) HomeGrid.save(this, d.fromPage, HomeGrid.items(this, d.fromPage).filter { it != d.item })
+                    HomeGrid.save(this, page, HomeGrid.items(this, page) + moved)
+                }
+            } else if (t != null) toast("그 자리에는 놓을 수 없어요.")
+        }
+        endDrag(cancel = false)
+    }
+
+    private fun endDrag(cancel: Boolean) {
+        val d = drag ?: return
+        drag = null
+        flip?.let { main.removeCallbacks(it) }; flip = null
+        overlay.removeView(d.float)
+        d.source?.alpha = 1f
+        deleteBar.visibility = View.GONE
+        grids.forEach { it.hideOutline() }
+        pager.isUserInputEnabled = true
+        if (!cancel) renderGrids()
+    }
+
+    // ---------- 크기 조절 ----------
+    private class Resize(val page: Int, var item: GridItem, val handles: List<View>) {
+        var corner = 0 // 0 없음, 1 왼쪽 위, 2 오른쪽 아래
+        var preview: GridItem = item
+        var ok = true
+    }
+
+    private var resize: Resize? = null
+
+    private fun beginResize(page: Int, item: GridItem) {
+        endResize()
+        if (pager.currentItem != page) pager.setCurrentItem(page, false)
+        val hs = (0..1).map {
+            View(this).apply { background = rounded(Color.WHITE, dpf(14f), dp(3), C.accent); elevation = dpf(10f) }
+                .also { v -> overlay.addView(v, FrameLayout.LayoutParams(dp(28), dp(28))) }
+        }
+        resize = Resize(page, item, hs)
+        pager.isUserInputEnabled = false
+        toast("모서리의 동그라미를 끌어 크기를 바꾸세요. 다른 곳을 누르면 끝나요.")
+        root.post { showResize() }
+    }
+
+    private fun showResize() {
+        val r = resize ?: return
+        val g = grids[r.page]
+        val p = r.preview
+        g.showOutline(p.x, p.y, p.w, p.h, r.ok)
+        val rect = g.rectOf(p.x, p.y, p.w, p.h)
+        val gl = IntArray(2); g.getLocationOnScreen(gl)
+        val ol = IntArray(2); overlay.getLocationOnScreen(ol)
+        val ox = gl[0] - ol[0]; val oy = gl[1] - ol[1]
+        val half = dp(14)
+        r.handles[0].x = (ox + rect[0] - half).toFloat(); r.handles[0].y = (oy + rect[1] - half).toFloat()
+        r.handles[1].x = (ox + rect[2] - half).toFloat(); r.handles[1].y = (oy + rect[3] - half).toFloat()
+    }
+
+    private fun handleResize(ev: MotionEvent): Boolean {
+        val r = resize ?: return false
+        val g = grids[r.page]
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                r.corner = 0
+                for ((i, h) in r.handles.withIndex()) {
+                    val l = IntArray(2); h.getLocationOnScreen(l)
+                    if (hypot(ev.rawX - (l[0] + h.width / 2), ev.rawY - (l[1] + h.height / 2)) < dp(36)) r.corner = i + 1
+                }
+                if (r.corner == 0) { endResize(); return true }
+            }
+            MotionEvent.ACTION_MOVE -> if (r.corner != 0) {
+                val gl = IntArray(2); g.getLocationOnScreen(gl)
+                val cx = ((ev.rawX - gl[0] - g.paddingLeft) / g.cellW).roundToInt()
+                val cy = ((ev.rawY - gl[1] - g.paddingTop) / g.cellH).roundToInt()
+                val it = r.item
+                val (mw, mh) = HomeGrid.minSize(it.kind)
+                val p = if (r.corner == 2) {
+                    it.copy(w = (cx - it.x).coerceIn(mw, HomeGrid.COLS - it.x), h = (cy - it.y).coerceIn(mh, HomeGrid.ROWS - it.y))
+                } else {
+                    val right = it.x + it.w; val bottom = it.y + it.h
+                    val nx = cx.coerceIn(0, right - mw); val ny = cy.coerceIn(0, bottom - mh)
+                    it.copy(x = nx, y = ny, w = right - nx, h = bottom - ny)
+                }
+                r.preview = p
+                r.ok = HomeGrid.isFree(HomeGrid.items(this, r.page), p.x, p.y, p.w, p.h, it)
+                showResize()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (r.corner != 0) {
+                if (r.ok && r.preview != r.item) {
+                    HomeGrid.save(this, r.page, HomeGrid.items(this, r.page).map { if (it == r.item) r.preview else it })
+                    r.item = r.preview
+                    renderGrids()
+                } else r.preview = r.item
+                r.ok = true
+                r.corner = 0
+                root.post { showResize() }
+            }
+        }
+        return true
+    }
+
+    private fun endResize() {
+        val r = resize ?: return
+        resize = null
+        r.handles.forEach { overlay.removeView(it) }
+        grids.forEach { it.hideOutline() }
+        pager.isUserInputEnabled = true
+    }
+
+    // =====================================================================
+    // 손가락 처리 (끌기 > 크기 조절 > 쓸기)
+    private fun drawerHeight(): Float = (if (drawer.height > 0) drawer.height else window.decorView.height).toFloat()
+
+    /** 손가락 아래에 위아래로 스크롤할 수 있는 게 있는지 (할 일 목록 등) */
+    private fun canScrollAt(v: View, rawX: Float, rawY: Float, dir: Int): Boolean {
+        val r = android.graphics.Rect()
+        if (!v.isShown || !v.getGlobalVisibleRect(r) || !r.contains(rawX.toInt(), rawY.toInt())) return false
+        if (v.canScrollVertically(dir)) return true
+        if (v is ViewGroup) for (i in v.childCount - 1 downTo 0) if (canScrollAt(v.getChildAt(i), rawX, rawY, dir)) return true
+        return false
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        lastRawX = ev.rawX; lastRawY = ev.rawY
+        if (drag != null) return handleDrag(ev)
+        if (resize != null) return handleResize(ev)
+        if (openFolder != null) return super.dispatchTouchEvent(ev)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.rawX; downY = ev.rawY; decided = false; dragMode = 0
+                vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(ev)
+                val loc = IntArray(2); dockRow.getLocationOnScreen(loc)
+                startInDock = ev.rawY >= loc[1] - dp(40)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                vt?.addMovement(ev)
+                val dx = ev.rawX - downX
+                val dy = ev.rawY - downY
+                if (!decided) {
+                    if (abs(dy) > touchSlop * 1.5f && abs(dy) > abs(dx) * 1.3f) {
+                        decided = true
+                        grids.forEach { it.cancelLongPress2() }
+                        if (drawer.visibility != View.VISIBLE) {
+                            val g = grids[pager.currentItem]
+                            if (dy < 0 && (startInDock || !canScrollAt(g, downX, downY, 1))) {
+                                dragMode = 1
+                                prepareDrawer()
+                                drawer.translationY = drawerHeight()
+                                drawer.visibility = View.VISIBLE
+                            } else if (dy > 0 && !canScrollAt(g, downX, downY, -1)) {
+                                dragMode = 3
+                                expandNotifications()
+                            }
+                        } else if (dy > 0 && !appList.canScrollVertically(-1)) {
+                            dragMode = 2
+                            hideKeyboard()
+                        }
+                        if (dragMode != 0) {
+                            val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
+                            super.dispatchTouchEvent(c); c.recycle()
+                        }
+                    } else if (abs(dx) > touchSlop * 1.5f) {
+                        decided = true
+                    }
+                }
+                val h = drawerHeight()
+                when (dragMode) {
+                    1 -> { setDrawerPos((h + dy).coerceIn(0f, h)); return true }
+                    2 -> { setDrawerPos(dy.coerceIn(0f, h)); return true }
+                    3 -> return true
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                vt?.addMovement(ev)
+                if (dragMode == 1 || dragMode == 2) {
+                    vt?.computeCurrentVelocity(1000)
+                    val vy = vt?.yVelocity ?: 0f
+                    val open = when { vy < -700 -> true; vy > 700 -> false; else -> drawer.translationY < drawerHeight() / 2 }
+                    settleDrawer(open)
+                    dragMode = 0
+                    return true
+                }
+                if (dragMode == 3) { dragMode = 0; return true }
+                dragMode = 0
+            }
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     // =====================================================================
@@ -416,7 +739,6 @@ class HomeActivity : Activity() {
             val pm = packageManager
             val col = Collator.getInstance(Locale.KOREAN)
             val list = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-                // 쿠비스 자신은 '쿠비스 설정'만 보여 줌
                 .filter { it.activityInfo.packageName != packageName || it.activityInfo.name == SettingsActivity::class.java.name }
                 .distinctBy { it.activityInfo.packageName }
                 .map {
@@ -426,22 +748,22 @@ class HomeActivity : Activity() {
                 .sortedWith { a, b -> col.compare(a.label, b.label) }
             runOnUiThread {
                 apps = list
-                appAdapter.filter(search.text.toString())
-                drawDock()
+                HomeGrid.prune(this, list.map { it.pkg }.toSet())
+                refreshAll()
             }
         }.start()
     }
 
+    private fun visibleApps(): List<AppEntry> { val h = store.hiddenApps(); return apps.filter { it.pkg !in h } }
+
     private fun defaultDock(): List<String> {
         val pm = packageManager
-        fun resolve(i: Intent) = pm.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
-            ?.takeIf { it != "android" }
+        fun resolve(i: Intent) = pm.resolveActivity(i, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName?.takeIf { it != "android" }
         val have = apps.map { it.pkg }.toSet()
         val bible = apps.firstOrNull { it.label.contains("성경") }?.pkg
         val camera = resolve(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
         val phone = resolve(Intent(Intent.ACTION_DIAL))
-        return listOfNotNull(bible, camera, phone, "com.nhn.android.nmap", "com.naver.whale")
-            .filter { it in have }.distinct()
+        return listOfNotNull(bible, camera, phone, "com.nhn.android.nmap", "com.naver.whale").filter { it in have }.distinct()
     }
 
     private fun drawDock() {
@@ -451,14 +773,13 @@ class HomeActivity : Activity() {
         dockRow.removeAllViews()
         for (pkg in pkgs) {
             val app = apps.firstOrNull { it.pkg == pkg } ?: continue
-            val iv = ImageView(this).apply {
+            dockRow.addView(ImageView(this).apply {
                 setImageDrawable(app.icon)
                 contentDescription = app.label
                 setPadding(dp(6), dp(6), dp(6), dp(6))
                 setOnClickListener { launch(app.pkg) }
-                setOnLongClickListener { appMenu(app, inDock = true); true }
-            }
-            dockRow.addView(iv, LinearLayout.LayoutParams(0, dp(68), 1f))
+                setOnLongClickListener { appMenu(app); true }
+            }, LinearLayout.LayoutParams(0, dp(68), 1f))
         }
     }
 
@@ -469,21 +790,30 @@ class HomeActivity : Activity() {
         safeStart(i)
     }
 
-    private fun appMenu(app: AppEntry, inDock: Boolean) {
+    private fun hideApp(pkg: String) {
+        store.setHidden(pkg, true)
+        store.dock()?.let { d -> if (pkg in d) store.setDock(d - pkg) }
+        for (p in 0 until HomeGrid.PAGES) HomeGrid.save(this, p, HomeGrid.items(this, p).filter { !(it.kind == "app" && it.pkg == pkg) })
+        refreshAll()
+        val label = apps.firstOrNull { it.pkg == pkg }?.label ?: pkg
+        Toast.makeText(this, "$label 을(를) 숨겼어요. 쿠비스 설정 > 숨긴 앱에서 다시 보이게 할 수 있어요.", Toast.LENGTH_LONG).show()
+    }
+
+    /** 앱을 길게 누르고 안 움직이고 떼면 나오는 메뉴 (서랍·폴더·고정줄) */
+    private fun appMenu(app: AppEntry) {
         val dock = store.dock() ?: emptyList()
-        val items = mutableListOf<String>()
-        if (inDock || app.pkg in dock) items.add("고정줄에서 빼기") else items.add("고정줄에 넣기")
-        items.add("폴더 옮기기"); items.add("숨기기"); items.add("앱 정보"); items.add("삭제")
+        val items = mutableListOf("홈 화면에 추가")
+        items.add(if (app.pkg in dock) "고정줄에서 빼기" else "고정줄에 넣기")
+        items.add("폴더 옮기기"); items.add("숨기기"); items.add("앱 정보"); items.add("앱 삭제")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(app.label)
             .setItems(items.toTypedArray()) { _, w ->
                 when (items[w]) {
+                    "홈 화면에 추가" -> { closeDrawer(); addAppToHome(pager.currentItem, app.pkg, null) }
                     "고정줄에서 빼기" -> { store.setDock(dock - app.pkg); drawDock() }
                     "고정줄에 넣기" -> {
-                        if (dock.size >= 5) {
-                            AlertDialog.Builder(this).setMessage("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")
-                                .setPositiveButton("확인", null).show()
-                        } else { store.setDock(dock + app.pkg); drawDock() }
+                        if (dock.size >= 5) toast("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")
+                        else { store.setDock(dock + app.pkg); drawDock() }
                     }
                     "폴더 옮기기" -> {
                         val order = store.folderOrder()
@@ -492,58 +822,142 @@ class HomeActivity : Activity() {
                             .setTitle("${app.label} → 어느 폴더로?")
                             .setItems(choices.toTypedArray()) { _, f ->
                                 store.moveToFolder(app.pkg, if (f < order.size) order[f] else Folders.TOP)
-                                appAdapter.filter(search.text.toString())
-                            }
-                            .show()
+                                refreshAll()
+                            }.show()
                     }
-                    "숨기기" -> {
-                        store.setHidden(app.pkg, true)
-                        if (app.pkg in dock) store.setDock(dock - app.pkg)
-                        appAdapter.filter(search.text.toString()); drawDock()
-                        android.widget.Toast.makeText(this, "${app.label}을(를) 숨겼어요. 쿠비스 설정 > 숨긴 앱에서 다시 보이게 할 수 있어요.", android.widget.Toast.LENGTH_LONG).show()
-                    }
+                    "숨기기" -> hideApp(app.pkg)
                     "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
-                    "삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
+                    "앱 삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
                 }
             }.show()
     }
 
-    // ---------- 전체 앱 서랍 ----------
-    private fun buildDrawer(): LinearLayout {
-        val d = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.argb(238, 5, 8, 15))
-            setPadding(dp(12), dp(16), dp(12), 0)
+    /** 서랍·폴더의 앱을 길게 누름 → 움직이면 홈으로 끌기, 안 움직이고 떼면 메뉴 */
+    private fun onDrawerAppLongPress(app: AppEntry) {
+        val size = dp(64)
+        startDrag(GridItem("app", app.pkg, 0, 0, 1, 1), null, null, size, size, size / 2f, size / 2f,
+            lastRawX, lastRawY, null, icon = app.icon) { appMenu(app) }
+    }
+
+    // =====================================================================
+    // 앱 서랍 (삼성식: 흐린 배경, 아래 검색창, 폴더 창)
+    private fun blurSupported(): Boolean =
+        Build.VERSION.SDK_INT >= 31 && (getSystemService(WindowManager::class.java)?.isCrossWindowBlurEnabled == true)
+
+    /** 서랍 위치에 맞춰 홈 흐리기·배경 블러 */
+    private fun setDrawerPos(ty: Float) {
+        drawer.translationY = ty
+        val frac = (1f - ty / drawerHeight()).coerceIn(0f, 1f)
+        mainContent.alpha = 1f - frac
+        if (Build.VERSION.SDK_INT >= 31 && blurSupported()) window.setBackgroundBlurRadius((frac * 70).toInt())
+    }
+
+    private fun buildDrawer(): FrameLayout {
+        val d = FrameLayout(this).apply {
+            setBackgroundColor(if (blurSupported()) Color.argb(70, 0, 0, 0) else Color.argb(215, 12, 14, 20))
             isClickable = true
         }
-        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        drawerColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // 위: ⋮ 메뉴
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, dp(8), dp(8), 0) }
+        top.addView(txt("⋮", 24f, Color.WHITE, gravity = Gravity.CENTER).apply {
+            setPadding(dp(14), dp(4), dp(14), dp(4)); setOnClickListener { drawerMenu() }
+        })
+        drawerColumn.addView(top)
+        appList = RecyclerView(this).apply {
+            layoutManager = GridLayoutManager(this@HomeActivity, 4)
+            adapter = appAdapter
+            setPadding(dp(8), dp(4), dp(8), dp(8)); clipToPadding = false
+        }
+        drawerColumn.addView(appList, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        // 아래: 둥근 검색창 + 마이크
+        val pill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.argb(110, 60, 60, 66), dpf(28f))
+            setPadding(dp(18), dp(4), dp(8), dp(4))
+        }
+        pill.addView(txt("🔍", 16f, Color.WHITE))
         search = EditText(this).apply {
-            hint = "앱 검색"; setHintTextColor(C.dim); setTextColor(C.text); textSize = 16f
-            background = rounded(C.panel, dpf(14f), dp(1), C.line)
-            setPadding(dp(14), dp(10), dp(14), dp(10)); isSingleLine = true
+            hint = "검색"; setHintTextColor(Color.argb(200, 230, 230, 235)); setTextColor(Color.WHITE); textSize = 17f
+            background = null; isSingleLine = true; imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                 override fun afterTextChanged(s: Editable?) { appAdapter.filter(s?.toString() ?: "") }
             })
         }
-        top.addView(search, LinearLayout.LayoutParams(0, WRAP, 1f))
-        top.addView(txt("닫기", 15f, C.text).apply {
-            setPadding(dp(14), dp(10), dp(6), dp(10)); setOnClickListener { closeDrawer() }
+        pill.addView(search, LinearLayout.LayoutParams(0, WRAP, 1f))
+        pill.addView(txt("🎙", 18f, Color.WHITE, gravity = Gravity.CENTER).apply {
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setOnClickListener {
+                try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+                        .putExtra(RecognizerIntent.EXTRA_PROMPT, "찾을 앱 이름을 말씀하세요"), 51)
+                } catch (_: Exception) { toast("음성 검색을 열 수 없어요.") }
+            }
         })
-        d.addView(top)
-        folderTitle = txt("", 18f, C.text, bold = true).apply {
-            setPadding(dp(6), dp(14), 0, 0); visibility = View.GONE
-            setOnClickListener { openFolder = null; appAdapter.filter("") }
+        drawerColumn.addView(pill, LinearLayout.LayoutParams(MATCH, WRAP).apply { setMargins(dp(20), dp(6), dp(20), dp(14)) })
+        d.addView(drawerColumn, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        // 폴더 창
+        folderLayer = FrameLayout(this).apply {
+            setBackgroundColor(Color.argb(90, 0, 0, 0))
+            visibility = View.GONE
+            setOnClickListener { closeFolder() } // 바깥 누르면 닫힘
         }
-        d.addView(folderTitle)
-        appList = RecyclerView(this).apply {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL }
+        folderTitle = txt("", 30f, Color.WHITE, bold = true, gravity = Gravity.CENTER).apply {
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            setShadowLayer(dpf(4f), 0f, dpf(1f), Color.argb(160, 0, 0, 0))
+            setOnClickListener { openFolder?.let { renameFolderDialog(it) } }
+        }
+        col.addView(folderTitle, LinearLayout.LayoutParams(MATCH, WRAP))
+        val addRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        addRow.addView(txt("⊕", 34f, Color.WHITE, gravity = Gravity.CENTER).apply {
+            setPadding(dp(14), 0, dp(14), dp(4)); setOnClickListener { openFolder?.let { addAppsToFolderDialog(it) } }
+        })
+        col.addView(addRow, LinearLayout.LayoutParams(MATCH, WRAP).apply { rightMargin = dp(28) })
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(Color.argb(200, 58, 52, 52), dpf(34f))
+            setPadding(dp(14), dp(18), dp(14), dp(18))
+            isClickable = true // 카드 안을 눌러도 안 닫힘
+        }
+        folderList = RecyclerView(this).apply {
             layoutManager = GridLayoutManager(this@HomeActivity, 4)
-            adapter = this@HomeActivity.appAdapter
-            setPadding(0, dp(12), 0, dp(12)); clipToPadding = false
+            adapter = folderAdapter
         }
-        d.addView(appList, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        card.addView(folderList, LinearLayout.LayoutParams(MATCH, WRAP))
+        col.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { setMargins(dp(20), 0, dp(20), 0) })
+        folderLayer.addView(col, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER_VERTICAL))
+        d.addView(folderLayer, FrameLayout.LayoutParams(MATCH, MATCH))
         return d
+    }
+
+    private fun drawerMenu() {
+        val items = arrayOf("숨긴 앱 보기·되돌리기", "폴더를 처음부터 다시 자동 정리", "쿠비스 설정")
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> startActivity(Intent(this, SettingsActivity::class.java).putExtra("section", "hidden").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    1 -> AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setMessage("모든 앱을 이름을 보고 폴더에 다시 나눌까요? 손으로 옮긴 것도 다시 정해져요.")
+                        .setPositiveButton("다시 정리") { _, _ -> Folders.resortAll(this, apps); refreshAll() }
+                        .setNegativeButton("취소", null).show()
+                    2 -> SettingsActivity.open(this)
+                }
+            }.show()
+    }
+
+    private fun prepareDrawer() {
+        closeFolder()
+        search.setText("")
+        appAdapter.filter("")
+        appList.scrollToPosition(0)
     }
 
     private fun openDrawer() {
@@ -556,12 +970,61 @@ class HomeActivity : Activity() {
 
     private fun closeDrawer() {
         if (drawer.visibility != View.VISIBLE) return
-        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
+        hideKeyboard()
+        closeFolder()
         settleDrawer(false)
     }
 
-    private var openFolder: String? = null
-    private lateinit var folderTitle: TextView
+    /** 끌어서 홈에 놓을 때: 애니메이션 없이 바로 숨김 */
+    private fun hideDrawerNow() {
+        hideKeyboard()
+        closeFolder()
+        drawer.animate().cancel()
+        drawer.visibility = View.GONE
+        setDrawerPos(drawerHeight())
+    }
+
+    private fun settleDrawer(open: Boolean) {
+        val from = drawer.translationY
+        val to = if (open) 0f else drawerHeight()
+        drawer.visibility = View.VISIBLE
+        android.animation.ValueAnimator.ofFloat(from, to).apply {
+            duration = if (open) 200 else 220
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener { setDrawerPos(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (!open) drawer.visibility = View.GONE
+                }
+            })
+        }.start()
+    }
+
+    private fun hideKeyboard() {
+        if (::search.isInitialized)
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(search.windowToken, 0)
+    }
+
+    // ---------- 폴더 창 ----------
+    private fun openFolderPopup(name: String) {
+        openFolder = name
+        folderTitle.text = name
+        folderAdapter.showFolder(name)
+        hideKeyboard()
+        if (Build.VERSION.SDK_INT >= 31) drawerColumn.setRenderEffect(RenderEffect.createBlurEffect(36f, 36f, Shader.TileMode.CLAMP))
+        else drawerColumn.alpha = 0.25f
+        folderLayer.alpha = 0f
+        folderLayer.visibility = View.VISIBLE
+        folderLayer.animate().alpha(1f).setDuration(160).start()
+    }
+
+    private fun closeFolder() {
+        if (openFolder == null) return
+        openFolder = null
+        if (Build.VERSION.SDK_INT >= 31) drawerColumn.setRenderEffect(null) else drawerColumn.alpha = 1f
+        folderLayer.visibility = View.GONE
+        appAdapter.filter(search.text.toString())
+    }
 
     private fun renameFolderDialog(name: String) {
         val et = EditText(this).apply { setText(name); setSelection(name.length) }
@@ -570,8 +1033,25 @@ class HomeActivity : Activity() {
             .setView(FrameLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0); addView(et) })
             .setPositiveButton("바꾸기") { _, _ ->
                 val n = et.text.toString().trim()
-                if (n.isNotEmpty() && n !in store.folderOrder()) { store.renameFolder(name, n); if (openFolder == name) openFolder = n }
-                appAdapter.filter(search.text.toString())
+                if (n.isNotEmpty() && n != name && n !in store.folderOrder()) {
+                    store.renameFolder(name, n)
+                    if (openFolder == name) { openFolder = n; folderTitle.text = n }
+                }
+                refreshAll()
+            }
+            .setNegativeButton("취소", null).show()
+    }
+
+    private fun addAppsToFolderDialog(name: String) {
+        val assign = Folders.assign(this, apps)
+        val cands = visibleApps().filter { assign[it.pkg] != name }
+        val checked = BooleanArray(cands.size)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("'$name'에 넣을 앱")
+            .setMultiChoiceItems(cands.map { it.label }.toTypedArray(), checked) { _, i, c -> checked[i] = c }
+            .setPositiveButton("넣기") { _, _ ->
+                cands.forEachIndexed { i, a -> if (checked[i]) store.moveToFolder(a.pkg, name) }
+                folderAdapter.showFolder(name); appAdapter.filter(search.text.toString())
             }
             .setNegativeButton("취소", null).show()
     }
@@ -579,29 +1059,27 @@ class HomeActivity : Activity() {
     /** 서랍 칸: 폴더 또는 앱 */
     private class Cell(val folder: String?, val apps: List<AppEntry>, val app: AppEntry?)
 
-    private inner class AppAdapter : RecyclerView.Adapter<AppAdapter.VH>() {
+    private inner class AppAdapter(private val inFolder: Boolean) : RecyclerView.Adapter<AppAdapter.VH>() {
         private var shown: List<Cell> = emptyList()
 
         inner class VH(val box: LinearLayout, val icon: FrameLayout, val label: TextView) : RecyclerView.ViewHolder(box)
 
+        /** 서랍: 검색어가 있으면 결과, 없으면 폴더 + 폴더 밖 앱 */
         fun filter(q: String) {
+            if (inFolder) return
             val k = q.replace(" ", "").lowercase()
+            val vis = visibleApps()
             val assign = if (apps.isEmpty()) emptyMap() else Folders.assign(this@HomeActivity, apps)
-            val hidden = store.hiddenApps()
-            val apps = apps.filter { it.pkg !in hidden }
-            shown = when {
-                k.isNotEmpty() -> apps.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
-                openFolder != null -> apps.filter { assign[it.pkg] == openFolder }.map { Cell(null, emptyList(), it) }
-                else -> store.folderOrder().map { f -> Cell(f, apps.filter { assign[it.pkg] == f }, null) } +
-                        apps.filter { assign[it.pkg] == Folders.TOP }.map { Cell(null, emptyList(), it) }
-            }
-            if (::folderTitle.isInitialized) {
-                val f = openFolder
-                folderTitle.visibility = if (f != null && k.isEmpty()) View.VISIBLE else View.GONE
-                folderTitle.text = "‹  $f"
-            }
-            @Suppress("NotifyDataSetChanged")
-            notifyDataSetChanged()
+            shown = if (k.isNotEmpty()) vis.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
+            else store.folderOrder().map { f -> Cell(f, vis.filter { assign[it.pkg] == f }, null) } +
+                    vis.filter { assign[it.pkg] == Folders.TOP }.map { Cell(null, emptyList(), it) }
+            @Suppress("NotifyDataSetChanged") notifyDataSetChanged()
+        }
+
+        fun showFolder(name: String) {
+            val assign = Folders.assign(this@HomeActivity, apps)
+            shown = visibleApps().filter { assign[it.pkg] == name }.map { Cell(null, emptyList(), it) }
+            @Suppress("NotifyDataSetChanged") notifyDataSetChanged()
         }
 
         override fun getItemCount() = shown.size
@@ -615,9 +1093,10 @@ class HomeActivity : Activity() {
             val icon = FrameLayout(this@HomeActivity)
             box.addView(icon, LinearLayout.LayoutParams(dp(56), dp(56)))
             val label = TextView(this@HomeActivity).apply {
-                textSize = 12f; setTextColor(C.text); gravity = Gravity.CENTER
+                textSize = 12.5f; setTextColor(Color.WHITE); gravity = Gravity.CENTER
                 maxLines = 1; ellipsize = TextUtils.TruncateAt.END
-                setPadding(0, dp(4), 0, 0)
+                setShadowLayer(dpf(3f), 0f, dpf(1f), Color.argb(170, 0, 0, 0))
+                setPadding(0, dp(5), 0, 0)
             }
             box.addView(label, LinearLayout.LayoutParams(MATCH, WRAP))
             return VH(box, icon, label)
@@ -629,37 +1108,34 @@ class HomeActivity : Activity() {
             val app = c.app
             if (app != null) {
                 h.icon.background = null
-                h.icon.addView(ImageView(this@HomeActivity).apply { setImageDrawable(app.icon) },
-                    FrameLayout.LayoutParams(MATCH, MATCH))
+                h.icon.addView(ImageView(this@HomeActivity).apply { setImageDrawable(app.icon) }, FrameLayout.LayoutParams(MATCH, MATCH))
                 h.label.text = app.label
                 h.box.setOnClickListener { launch(app.pkg); closeDrawer() }
-                h.box.setOnLongClickListener { appMenu(app, inDock = false); true }
+                h.box.setOnLongClickListener { onDrawerAppLongPress(app); true }
             } else {
                 val name = c.folder ?: ""
-                // 폴더: 앞의 앱 4개 아이콘을 2x2로
-                h.icon.background = rounded(Color.argb(90, 255, 255, 255), dpf(16f))
+                h.icon.background = rounded(Color.argb(95, 255, 255, 255), dpf(18f))
                 val grid = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
                 for (r in 0 until 2) {
                     val row = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.HORIZONTAL }
                     for (col in 0 until 2) {
-                        val iv = ImageView(this@HomeActivity).apply {
+                        row.addView(ImageView(this@HomeActivity).apply {
                             setImageDrawable(c.apps.getOrNull(r * 2 + col)?.icon?.constantState?.newDrawable()?.mutate())
                             setPadding(dp(2), dp(2), dp(2), dp(2))
-                        }
-                        row.addView(iv, LinearLayout.LayoutParams(0, dp(22), 1f))
+                        }, LinearLayout.LayoutParams(0, dp(22), 1f))
                     }
                     grid.addView(row)
                 }
                 h.icon.addView(grid, FrameLayout.LayoutParams(MATCH, MATCH))
-                h.label.text = "$name ${c.apps.size}"
-                h.box.setOnClickListener { openFolder = name; filter("") ; appList.scrollToPosition(0) }
+                h.label.text = name
+                h.box.setOnClickListener { openFolderPopup(name) }
                 h.box.setOnLongClickListener { renameFolderDialog(name); true }
             }
         }
     }
 }
 
-/** 세 페이지를 그대로 끼워 넣는 어댑터 */
+/** 페이지들을 그대로 끼워 넣는 어댑터 */
 class PagesAdapter(private val views: List<View>) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
     override fun getItemCount() = views.size
     override fun getItemViewType(position: Int) = position
