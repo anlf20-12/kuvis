@@ -2,17 +2,12 @@ package com.t.kuvis
 
 import android.app.Activity
 import android.app.AlertDialog
-import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
 import android.net.Uri
 import android.os.Build
-import android.provider.Settings
 import android.widget.Toast
 import org.json.JSONObject
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -92,66 +87,21 @@ object Updater {
             .show()
     }
 
+    /**
+     * 브라우저로 새 버전 파일을 받게 함.
+     * (쿠비스가 직접 받아서 설치하면 휴대폰 보안이 '악성 앱'으로 의심해 막음)
+     */
     private fun start(act: Activity, r: Release) {
-        // 직접 만든 앱은 '이 출처 허용'을 한 번 켜야 설치할 수 있음
-        if (!act.packageManager.canRequestPackageInstalls()) {
-            AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setMessage("처음 한 번만: 다음 화면에서 '이 출처 허용'을 켜고 돌아와서 다시 '업데이트'를 눌러 주세요.")
-                .setPositiveButton("설정 열기") { _, _ ->
-                    act.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${act.packageName}")))
-                    Prefs(act).p.edit().putLong("lastUpdateCheck", 0L).apply()
+        AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setMessage("브라우저에서 새 버전 파일(kuvis.apk)을 받아요.\n\n받기가 끝나면 알림이나 다운로드 목록에서 파일을 눌러 '설치' → '업데이트'를 누르면 돼요.")
+            .setPositiveButton("받기") { _, _ ->
+                try {
+                    act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.apkUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (e: Exception) {
+                    ErrorLog.add(act, "업데이트 받기 화면 열기 실패", e.toString())
+                    Toast.makeText(act, "브라우저를 열지 못했어요: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-                .setNegativeButton("취소", null).show()
-            return
-        }
-        Toast.makeText(act, "새 버전을 받는 중이에요…", Toast.LENGTH_LONG).show()
-        Thread {
-            try {
-                val f = File(act.cacheDir, "kuvis-update.apk")
-                val c = URL(r.apkUrl).openConnection() as HttpURLConnection
-                c.instanceFollowRedirects = true
-                c.connectTimeout = 15000; c.readTimeout = 60000
-                c.setRequestProperty("User-Agent", "kuvis-app")
-                try { c.inputStream.use { inp -> f.outputStream().use { inp.copyTo(it) } } } finally { c.disconnect() }
-                install(act, f)
-            } catch (e: Exception) {
-                act.runOnUiThread { Toast.makeText(act, "받지 못했어요: ${e.message}", Toast.LENGTH_LONG).show() }
             }
-        }.start()
-    }
-
-    /** 휴대폰 기본 설치 화면으로 넘김 (직접 설치는 일부 휴대폰에서 막힘) */
-    private fun install(act: Activity, f: File) {
-        val uri = androidx.core.content.FileProvider.getUriForFile(act, "${act.packageName}.files", f)
-        val i = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        act.runOnUiThread {
-            try { act.startActivity(i) }
-            catch (e: Exception) {
-                ErrorLog.add(act, "업데이트 설치 화면 열기 실패", e.toString())
-                Toast.makeText(act, "설치 화면을 열지 못했어요: ${e.message}", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-}
-
-/** 설치 진행 결과를 받음. 사용자 확인이 필요하면 확인 창을 띄움 */
-class InstallReceiver : BroadcastReceiver() {
-    override fun onReceive(ctx: Context, intent: Intent) {
-        when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                @Suppress("DEPRECATION")
-                val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT) ?: return
-                confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try { ctx.startActivity(confirm) } catch (_: Exception) {}
-            }
-            PackageInstaller.STATUS_SUCCESS -> {}
-            else -> {
-                val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "알 수 없는 이유"
-                ErrorLog.add(ctx, "업데이트 실패", msg)
-                Toast.makeText(ctx, "업데이트 실패: $msg", Toast.LENGTH_LONG).show()
-            }
-        }
+            .setNegativeButton("취소", null).show()
     }
 }

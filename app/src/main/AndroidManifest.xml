@@ -13,7 +13,6 @@
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
@@ -97,18 +96,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-
-        <!-- 업데이트 파일을 휴대폰 설치 화면에 넘기기 -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="com.t.kuvis.files"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
-        </provider>
-
-        <!-- 업데이트 설치 결과 받기 -->
-        <receiver android:name=".InstallReceiver" android:exported="false" />
 
         <!-- 디지털 어시스턴트 등록 -->
         <service
