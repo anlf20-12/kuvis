@@ -171,6 +171,12 @@ class PhoneTools(private val ctx: Context) {
             .put(tool("rename_folder", "앱 서랍 폴더 이름을 바꾼다.",
                 JSONObject().put("from", p("string", "지금 이름")).put("to", p("string", "새 이름")), listOf("from", "to")))
             .put(tool("resort_folders", "모든 앱을 이름을 보고 폴더에 처음부터 다시 자동 정리한다. 사용자가 손으로 옮긴 것도 다시 정해지니 확인받은 뒤에만.", JSONObject()))
+            .put(tool("hide_apps", "앱을 전체 앱 서랍에서 숨기거나(hidden=true) 다시 보이게(false) 한다. 앱은 지워지지 않음.",
+                JSONObject().put("apps", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))
+                    .put("description", "앱 이름 또는 패키지명 목록"))
+                    .put("hidden", p("boolean", "숨기기 true, 다시 보이기 false")),
+                listOf("apps", "hidden")))
+            .put(tool("list_hidden_apps", "숨긴 앱 목록.", JSONObject()))
             .put(tool("show_page", "홈 화면에서 특정 페이지를 보여 준다.",
                 JSONObject().put("page", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("calendar").put("home").put("memo"))),
@@ -241,6 +247,23 @@ class PhoneTools(private val ctx: Context) {
         "get_weather" -> Weather.get(ctx)?.let { Weather.summary(it) } ?: "날씨를 가져오지 못함"
         "set_dock" -> setDock(a.getJSONArray("apps"))
         "show_page" -> { Bus.showPage(a.getString("page")); "보여 줌" }
+        "hide_apps" -> {
+            val arr = a.getJSONArray("apps"); val hide = a.optBoolean("hidden", true)
+            val done = mutableListOf<String>(); val failed = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val q = arr.getString(i)
+                try {
+                    // 숨긴 앱도 찾을 수 있게 숨김 목록에서 먼저 찾음
+                    val pkg = store.hiddenApps().firstOrNull { h -> h == q || labelOf(h).replace(" ", "").contains(q.replace(" ", ""), true) } ?: resolvePkg(q)
+                    store.setHidden(pkg, hide)
+                    if (hide) store.dock()?.let { d -> if (pkg in d) store.setDock(d - pkg) }
+                    done.add(labelOf(pkg))
+                } catch (_: Exception) { failed.add(q) }
+            }
+            Bus.changed()
+            (if (hide) "숨김: " else "다시 보이게 함: ") + done.joinToString(", ") + (if (failed.isNotEmpty()) " / 못 찾음: ${failed.joinToString(", ")}" else "")
+        }
+        "list_hidden_apps" -> store.hiddenApps().map { labelOf(it) }.ifEmpty { listOf("숨긴 앱 없음") }.joinToString(", ")
         "list_folders" -> {
             val apps = entries()
             val assign = Folders.assign(ctx, apps)
@@ -428,6 +451,10 @@ class PhoneTools(private val ctx: Context) {
             .distinctBy { it.pkg }
             .filter { it.pkg != ctx.packageName }
     }
+
+    private fun labelOf(pkg: String): String = try {
+        ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
+    } catch (_: Exception) { pkg }
 
     private fun entries(): List<AppEntry> {
         val pm = ctx.packageManager

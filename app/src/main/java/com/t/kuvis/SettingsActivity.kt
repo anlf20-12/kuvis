@@ -55,6 +55,7 @@ class SettingsActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var box: LinearLayout
     private lateinit var setupBox: LinearLayout
+    private lateinit var hiddenBox: LinearLayout
     private lateinit var voiceList: LinearLayout
     private lateinit var keyEt: EditText
     private lateinit var extraEt: EditText
@@ -86,7 +87,10 @@ class SettingsActivity : Activity() {
         buildVoice(section("목소리와 대화"))
         // 4. 할 수 있는 일
         buildAbilities(section("쿠비스가 할 수 있는 일"))
-        // 5. 기타
+        // 5. 숨긴 앱
+        hiddenBox = section("숨긴 앱")
+        refreshHidden()
+        // 6. 기타
         buildEtc(section("기타"))
 
         startTts()
@@ -95,6 +99,7 @@ class SettingsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshSetup()
+        if (::hiddenBox.isInitialized) refreshHidden()
     }
 
     override fun onPause() {
@@ -457,7 +462,7 @@ class SettingsActivity : Activity() {
             "📝 메모" to listOf("메모해 줘, 수련회 장소 후보는 ○○ 수양관", "수련회 메모에 '예산 50만 원' 덧붙여 줘", "수련회 메모 찾아 줘"),
             "🌤 날씨" to listOf("내일 비 와?", "이번 주 날씨 어때?"),
             "⏰ 알람·타이머" to listOf("내일 아침 6시 알람", "라면 3분 타이머"),
-            "📱 앱" to listOf("유튜브 열어 줘", "안 쓰는 앱 정리하자", "카카오T를 생활 폴더로 옮겨 줘", "금융 폴더 이름을 은행으로 바꿔 줘", "고정줄에 카카오톡 넣어 줘", "메모 페이지 보여 줘"),
+            "📱 앱" to listOf("유튜브 열어 줘", "안 쓰는 앱 정리하자", "넷플릭스 숨겨 줘", "카카오T를 생활 폴더로 옮겨 줘", "금융 폴더 이름을 은행으로 바꿔 줘", "고정줄에 카카오톡 넣어 줘", "메모 페이지 보여 줘"),
             "📞 연락" to listOf("○○ 전도사님께 전화해 줘 (확인 후 걸어요)", "○○에게 '조금 늦어요' 문자 보내 줘 (확인 후 보내요)"),
             "🔦 기기" to listOf("손전등 켜 줘", "볼륨 50으로", "배터리 얼마야?", "와이파이 설정 열어 줘"),
             "🔎 그 밖에" to listOf("오늘 뉴스 알려 줘 (웹 검색)", "로마서 8장 28절이 어떤 내용이야?", "그만 / 새 대화")
@@ -471,7 +476,27 @@ class SettingsActivity : Activity() {
     }
 
     // =====================================================================
-    // 5. 기타
+    // 5. 숨긴 앱
+    private fun refreshHidden() {
+        hiddenBox.removeAllViews()
+        val store = Store(this)
+        val hidden = store.hiddenApps()
+        if (hidden.isEmpty()) {
+            hiddenBox.addView(txt("숨긴 앱이 없어요. 전체 앱에서 앱을 길게 눌러 '숨기기'를 고르면 여기로 와요.", 13f, C.dim))
+            return
+        }
+        hiddenBox.addView(txt("숨긴 앱은 전체 앱·폴더·검색에 안 보여요. 쿠비스에게 말하면 열 수는 있어요.", 12f, C.dim))
+        for (pkg in hidden.sorted()) {
+            val label = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(8), 0, 0) }
+            row.addView(txt(label, 15f, C.text), LinearLayout.LayoutParams(0, WRAP, 1f))
+            row.addView(button("다시 보이기") { store.setHidden(pkg, false); Bus.changed(); refreshHidden() })
+            hiddenBox.addView(row)
+        }
+    }
+
+    // =====================================================================
+    // 6. 기타
     private fun buildEtc(c: LinearLayout) {
         val store = Store(this)
         c.addView(button("할 일·메모 백업 내보내기") {

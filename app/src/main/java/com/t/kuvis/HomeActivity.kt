@@ -365,7 +365,7 @@ class HomeActivity : Activity() {
         val dock = store.dock() ?: emptyList()
         val items = mutableListOf<String>()
         if (inDock || app.pkg in dock) items.add("고정줄에서 빼기") else items.add("고정줄에 넣기")
-        items.add("폴더 옮기기"); items.add("앱 정보"); items.add("삭제")
+        items.add("폴더 옮기기"); items.add("숨기기"); items.add("앱 정보"); items.add("삭제")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(app.label)
             .setItems(items.toTypedArray()) { _, w ->
@@ -383,6 +383,12 @@ class HomeActivity : Activity() {
                             .setTitle("${app.label} → 어느 폴더로?")
                             .setItems(order.toTypedArray()) { _, f -> store.moveToFolder(app.pkg, order[f]); appAdapter.filter(search.text.toString()) }
                             .show()
+                    }
+                    "숨기기" -> {
+                        store.setHidden(app.pkg, true)
+                        if (app.pkg in dock) store.setDock(dock - app.pkg)
+                        appAdapter.filter(search.text.toString()); drawDock()
+                        android.widget.Toast.makeText(this, "${app.label}을(를) 숨겼어요. 쿠비스 설정 > 숨긴 앱에서 다시 보이게 할 수 있어요.", android.widget.Toast.LENGTH_LONG).show()
                     }
                     "앱 정보" -> safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}")))
                     "삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.pkg}")))
@@ -473,6 +479,8 @@ class HomeActivity : Activity() {
         fun filter(q: String) {
             val k = q.replace(" ", "").lowercase()
             val assign = if (apps.isEmpty()) emptyMap() else Folders.assign(this@HomeActivity, apps)
+            val hidden = store.hiddenApps()
+            val apps = apps.filter { it.pkg !in hidden }
             shown = when {
                 k.isNotEmpty() -> apps.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
                 openFolder != null -> apps.filter { assign[it.pkg] == openFolder }.map { Cell(null, emptyList(), it) }

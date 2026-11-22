@@ -100,3 +100,15 @@ fun Store.renameFolder(from: String, to: String): Boolean {
     setFolderAssign(folderAssign().mapValues { if (it.value == from) to else it.value })
     return true
 }
+
+// ---------- 숨긴 앱 ----------
+fun Store.hiddenApps(): Set<String> {
+    val s = rawGet("hiddenApps") ?: return emptySet()
+    return try { val a = JSONArray(s); (0 until a.length()).map { a.getString(it) }.toSet() } catch (_: Exception) { emptySet() }
+}
+
+fun Store.setHidden(pkg: String, hidden: Boolean) {
+    val cur = hiddenApps().toMutableSet()
+    if (hidden) cur.add(pkg) else cur.remove(pkg)
+    rawPut("hiddenApps", JSONArray(cur.toList()).toString())
+}
