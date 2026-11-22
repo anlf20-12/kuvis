@@ -120,19 +120,18 @@ object Updater {
         }.start()
     }
 
-    private fun install(ctx: Context, f: File) {
-        val pi = ctx.packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        params.setAppPackageName(ctx.packageName)
-        val id = pi.createSession(params)
-        pi.openSession(id).use { s ->
-            s.openWrite("kuvis.apk", 0, f.length()).use { out ->
-                f.inputStream().use { it.copyTo(out) }
-                s.fsync(out)
+    /** 휴대폰 기본 설치 화면으로 넘김 (직접 설치는 일부 휴대폰에서 막힘) */
+    private fun install(act: Activity, f: File) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(act, "${act.packageName}.files", f)
+        val i = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        act.runOnUiThread {
+            try { act.startActivity(i) }
+            catch (e: Exception) {
+                ErrorLog.add(act, "업데이트 설치 화면 열기 실패", e.toString())
+                Toast.makeText(act, "설치 화면을 열지 못했어요: ${e.message}", Toast.LENGTH_LONG).show()
             }
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-            val pending = PendingIntent.getBroadcast(ctx, id, Intent(ctx, InstallReceiver::class.java), flags)
-            s.commit(pending.intentSender)
         }
     }
 }
@@ -150,6 +149,7 @@ class InstallReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_SUCCESS -> {}
             else -> {
                 val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "알 수 없는 이유"
+                ErrorLog.add(ctx, "업데이트 실패", msg)
                 Toast.makeText(ctx, "업데이트 실패: $msg", Toast.LENGTH_LONG).show()
             }
         }
