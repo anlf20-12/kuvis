@@ -98,7 +98,6 @@ class CalendarPage(home: HomeActivity) : Page(home) {
             setPadding(home.dp(10), home.dp(6), home.dp(10), home.dp(6))
             setOnClickListener { ym = YearMonth.now(); selected = LocalDate.now(); refresh() }
         })
-        head.addView(iconBtn("⟳") { syncNow() })
         head.addView(iconBtn("+") { addEvent() })
         c.addView(head)
 
@@ -226,30 +225,6 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         } catch (_: Exception) {}
         // 삼성 '공휴일'과 구글 '대한민국의 휴일'처럼 같은 날 같은 이름은 하나만
         return out.distinctBy { Triple(it.title.replace(" ", ""), it.startDate, if (it.allDay) -1L else it.begin) }
-    }
-
-    /** 구글 캘린더 지금 동기화 */
-    private fun syncNow() {
-        val accounts = mutableSetOf<android.accounts.Account>()
-        try {
-            home.contentResolver.query(CalendarContract.Calendars.CONTENT_URI,
-                arrayOf(CalendarContract.Calendars.ACCOUNT_NAME, CalendarContract.Calendars.ACCOUNT_TYPE), null, null, null)?.use { c ->
-                while (c.moveToNext()) {
-                    val n = c.getString(0) ?: continue; val t = c.getString(1) ?: continue
-                    if (t == "com.google") accounts.add(android.accounts.Account(n, t))
-                }
-            }
-        } catch (_: Exception) {}
-        if (accounts.isEmpty()) { android.widget.Toast.makeText(home, "동기화할 구글 계정이 없어요.", android.widget.Toast.LENGTH_SHORT).show(); return }
-        for (a in accounts) try {
-            android.content.ContentResolver.requestSync(a, CalendarContract.AUTHORITY, android.os.Bundle().apply {
-                putBoolean(android.content.ContentResolver.SYNC_EXTRAS_MANUAL, true)
-                putBoolean(android.content.ContentResolver.SYNC_EXTRAS_EXPEDITED, true)
-            })
-        } catch (_: Exception) {}
-        android.widget.Toast.makeText(home, "구글 캘린더를 동기화하고 있어요…", android.widget.Toast.LENGTH_SHORT).show()
-        postDelayed({ refresh() }, 5000)
-        postDelayed({ refresh() }, 20000)
     }
 
     private fun addEvent() {
