@@ -75,7 +75,7 @@ object Updater {
             var url: String? = null
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
-                if (a.optString("name").endsWith(".apk")) { url = a.optString("browser_download_url"); break }
+                if (a.optString("name") == "kuvis.apk") { url = a.optString("browser_download_url"); break }
             }
             return Release(100 + n, j.optString("name"), j.optString("body").trim(), url ?: return null)
         } finally { c.disconnect() }

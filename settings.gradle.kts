@@ -5,3 +5,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "Kuvis"
 include(":app")
+include(":notify")

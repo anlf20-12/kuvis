@@ -281,6 +281,25 @@ class SettingsActivity : Activity() {
             }
         }
 
+        val helper = NotifyHelper.enabled(this)
+        setupRow("알림 읽기·답장 (알림 도우미 앱)", helper == true, "켜져 있어요",
+            if (helper == null) "도우미 앱을 컴퓨터로 한 번 설치해야 해요" else "도우미 앱에서 알림 접근을 켜 주세요",
+            if (helper == true) null else if (helper == null) "방법 보기" else "켜기") {
+            if (helper == null) {
+                AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setTitle("알림 도우미 설치")
+                    .setMessage("알림을 읽는 앱은 구글 Play 프로텍트가 휴대폰에서 바로 설치하는 걸 막아요. 그래서 이 기능만 작은 도우미 앱으로 나눴고, 컴퓨터로 한 번만 설치하면 돼요.\n\n" +
+                        "1) 휴대폰: 설정 > 휴대전화 정보 > 소프트웨어 정보 > '빌드번호'를 7번 눌러 개발자 모드 켜기\n" +
+                        "2) 설정 > 개발자 옵션 > 'USB 디버깅' 켜기\n" +
+                        "3) 휴대폰을 컴퓨터에 USB로 연결하고, 휴대폰에 뜨는 '허용'을 누르기\n" +
+                        "4) Claude 앱에서 '알림 도우미 설치해 줘'라고 말하기 (설치는 Claude가 안내해요)\n\n" +
+                        "설치가 끝나면 개발자 옵션은 다시 꺼도 돼요.")
+                    .setPositiveButton("확인", null).show()
+            } else {
+                packageManager.getLaunchIntentForPackage(NotifyHelper.PKG)?.let { startSafe(it) }
+            }
+        }
+
         val usage = usageAllowed()
         setupRow("사용 기록 접근 (오래 안 쓴 앱 찾기)", usage, "허용됨", "앱 정리를 쓰려면 '쿠비스'를 허용해 주세요",
             if (usage) null else "열기") { startSafe(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
@@ -509,6 +528,7 @@ class SettingsActivity : Activity() {
             "⏰ 알람·타이머" to listOf("내일 아침 6시 알람", "라면 3분 타이머"),
             "📱 앱" to listOf("유튜브 열어 줘", "안 쓰는 앱 정리하자", "넷플릭스 숨겨 줘", "카카오T를 생활 폴더로 옮겨 줘", "금융 폴더 이름을 은행으로 바꿔 줘", "고정줄에 카카오톡 넣어 줘", "메모 페이지 보여 줘"),
             "📞 연락" to listOf("○○ 전도사님께 전화해 줘 (확인 후 걸어요)", "○○에게 '조금 늦어요' 문자 보내 줘 (확인 후 보내요)"),
+            "💬 알림 (도우미 앱 필요)" to listOf("카톡 온 거 읽어 줘", "방금 카톡에 '곧 갈게'라고 답해 줘 (확인 후 보내요)"),
             "🧠 기억" to listOf("기억해 줘, 다누 어린이집은 ○○이야", "내 차 번호 기억해?", "어린이집 기억 지워 줘"),
             "🛠 쿠비스 고치기" to listOf("홈 화면 시계를 더 크게 해 줬으면 좋겠어 (요청 목록에 적혀요)", "→ Claude 앱에서 '쿠비스 요청 처리해 줘'라고 하면 업데이트로 나와요"),
             "🔦 기기" to listOf("손전등 켜 줘", "볼륨 50으로", "배터리 얼마야?", "와이파이 설정 열어 줘"),
@@ -518,7 +538,7 @@ class SettingsActivity : Activity() {
             c.addView(txt(title, 15f, C.text, bold = true).apply { setPadding(0, dp(10), 0, dp(2)) })
             for (e in examples) c.addView(txt("“$e”", 14f, C.dim).apply { setPadding(dp(8), dp(1), 0, dp(1)) })
         }
-        c.addView(txt("\n안 되는 것: 카톡 같은 알림 읽기·답장(구글 보안 정책으로 설치가 막혀서 뺐어요), 다른 앱 안의 버튼 누르기.",
+        c.addView(txt("\n안 되는 것: 다른 앱 안의 버튼 누르기(예: 카톡 새 대화 시작)는 아직 못 해요.",
             12f, C.dim))
     }
 

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <queries>
+        <package android:name="com.t.kuvis" />
+    </queries>
+
+    <application
+        android:label="쿠비스 알림 도우미"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity android:name=".HelperActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".HelperListener"
+            android:exported="true"
+            android:label="쿠비스 알림 도우미"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 쿠비스 본체가 묻는 창구. 같은 서명 키로 만든 앱만 받아 줌 -->
+        <provider
+            android:name=".HelperProvider"
+            android:authorities="com.t.kuvis.notify"
+            android:exported="true" />
+    </application>
+</manifest>

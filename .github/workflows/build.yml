@@ -18,11 +18,15 @@ jobs:
           KS: ${{ secrets.KUVIS_KEYSTORE_B64 }}
         run: if [ -n "$KS" ]; then echo "$KS" | base64 -d > app/kuvis.keystore; fi
       - run: chmod +x gradlew && ./gradlew assembleRelease --stacktrace
-      - run: cp app/build/outputs/apk/release/app-release.apk kuvis.apk
+      - run: |
+          cp app/build/outputs/apk/release/app-release.apk kuvis.apk
+          cp notify/build/outputs/apk/release/notify-release.apk kuvis-notify-helper.apk
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: 쿠비스 3.1.${{ github.run_number }}
           body: ${{ github.event.head_commit.message }}
-          files: kuvis.apk
+          files: |
+            kuvis.apk
+            kuvis-notify-helper.apk
           make_latest: true

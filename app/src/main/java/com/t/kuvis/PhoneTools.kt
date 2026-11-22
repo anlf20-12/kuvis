@@ -188,6 +188,11 @@ class PhoneTools(private val ctx: Context) {
             .put(tool("list_memory", "쿠비스가 기억하고 있는 것 목록.", JSONObject()))
             .put(tool("feature_request", "T가 쿠비스에 새 기능이나 고칠 점을 말하면 기억장의 요청 목록에 적는다. Claude 앱에서 처리해 업데이트로 나온다.",
                 JSONObject().put("text", p("string", "요청 내용을 한두 문장으로 정리")), listOf("text")))
+            .put(tool("read_notifications", "지금 휴대폰에 와 있는 알림(카톡·문자 등)을 읽는다. 번호를 함께 준다. (알림 도우미 앱 필요)",
+                JSONObject().put("app", p("string", "앱 이름으로 거르기(선택). 예: 카카오톡"))))
+            .put(tool("reply_notification", "알림에 바로 답장한다(카톡 등). 반드시 받는 사람과 내용을 말하고 확인받은 뒤에만.",
+                JSONObject().put("index", p("integer", "read_notifications에서 받은 번호")).put("message", p("string", "보낼 내용")),
+                listOf("index", "message")))
             .put(tool("backup_now", "할 일·메모·기억을 휴대폰 다운로드/쿠비스 폴더에 지금 백업한다.", JSONObject()))
             .put(tool("show_page", "홈 화면에서 특정 페이지를 보여 준다.",
                 JSONObject().put("page", JSONObject().put("type", "string")
@@ -283,6 +288,8 @@ class PhoneTools(private val ctx: Context) {
             "요청.md에 적음: $t"
         }
         "backup_now" -> "백업함: " + Backup.save(ctx)
+        "read_notifications" -> NotifyHelper.read(ctx, a.optString("app", ""))
+        "reply_notification" -> NotifyHelper.reply(ctx, a.getInt("index"), a.getString("message"))
         "hide_apps" -> {
             val arr = a.getJSONArray("apps"); val hide = a.optBoolean("hidden", true)
             val done = mutableListOf<String>(); val failed = mutableListOf<String>()
