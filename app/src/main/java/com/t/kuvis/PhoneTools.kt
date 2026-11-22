@@ -163,7 +163,7 @@ class PhoneTools(private val ctx: Context) {
                     .put("description", "앱 이름 또는 패키지명 목록")),
                 listOf("apps")))
             .put(tool("list_folders", "전체 앱 서랍의 폴더와 각 폴더에 든 앱 목록.", JSONObject()))
-            .put(tool("move_apps_to_folder", "앱들을 전체 앱 서랍의 한 폴더로 옮긴다. 없는 폴더 이름이면 새로 만든다.",
+            .put(tool("move_apps_to_folder", "앱들을 전체 앱 서랍의 한 폴더로 옮긴다. 없는 폴더 이름이면 새로 만든다. folder를 '폴더 밖'으로 하면 폴더 아래에 따로 둔다.",
                 JSONObject().put("apps", JSONObject().put("type", "array").put("items", JSONObject().put("type", "string"))
                     .put("description", "앱 이름 또는 패키지명 목록"))
                     .put("folder", p("string", "폴더 이름")),
@@ -177,6 +177,17 @@ class PhoneTools(private val ctx: Context) {
                     .put("hidden", p("boolean", "숨기기 true, 다시 보이기 false")),
                 listOf("apps", "hidden")))
             .put(tool("list_hidden_apps", "숨긴 앱 목록.", JSONObject()))
+            .put(tool("remember", "T에 대해 앞으로도 기억할 사실 한 줄을 저장한다 (예: '다누 어린이집은 ○○').",
+                JSONObject().put("fact", p("string", "기억할 내용 한 줄")), listOf("fact")))
+            .put(tool("forget", "기억한 것 중 이 말이 들어간 것을 지운다.",
+                JSONObject().put("query", p("string", "지울 내용의 일부")), listOf("query")))
+            .put(tool("list_memory", "쿠비스가 기억하고 있는 것 목록.", JSONObject()))
+            .put(tool("read_notifications", "지금 휴대폰에 와 있는 알림(카톡·문자 등)을 읽는다. 번호를 함께 준다.",
+                JSONObject().put("app", p("string", "앱 이름으로 거르기(선택). 예: 카카오톡"))))
+            .put(tool("reply_notification", "알림에 바로 답장한다(카톡 등). 반드시 받는 사람과 내용을 말하고 확인받은 뒤에만.",
+                JSONObject().put("index", p("integer", "read_notifications에서 받은 번호")).put("message", p("string", "보낼 내용")),
+                listOf("index", "message")))
+            .put(tool("backup_now", "할 일·메모·기억을 휴대폰 다운로드/쿠비스 폴더에 지금 백업한다.", JSONObject()))
             .put(tool("show_page", "홈 화면에서 특정 페이지를 보여 준다.",
                 JSONObject().put("page", JSONObject().put("type", "string")
                     .put("enum", JSONArray().put("calendar").put("home").put("memo"))),
@@ -197,6 +208,8 @@ class PhoneTools(private val ctx: Context) {
         "todo_add", "todo_done", "todo_edit" -> "할 일 정리 중…"
         "memo_add", "memo_edit" -> "메모하는 중…"
         "get_weather" -> "날씨 보는 중…"
+        "read_notifications" -> "알림 보는 중…"
+        "reply_notification" -> "답장 보내는 중…"
         else -> "작업 중…"
     }
 
@@ -247,6 +260,20 @@ class PhoneTools(private val ctx: Context) {
         "get_weather" -> Weather.get(ctx)?.let { Weather.summary(it) } ?: "날씨를 가져오지 못함"
         "set_dock" -> setDock(a.getJSONArray("apps"))
         "show_page" -> { Bus.showPage(a.getString("page")); "보여 줌" }
+        "remember" -> {
+            val f = a.getString("fact").trim()
+            store.setMemory(store.memory().filter { it != f } + f); "기억함: $f"
+        }
+        "forget" -> {
+            val q = a.getString("query").trim()
+            val before = store.memory()
+            val after = before.filter { !it.contains(q, ignoreCase = true) }
+            store.setMemory(after); "지움 ${before.size - after.size}개"
+        }
+        "list_memory" -> store.memory().ifEmpty { listOf("기억한 것 없음") }.joinToString("\n")
+        "read_notifications" -> Notifs.read(ctx, a.optString("app", ""))
+        "reply_notification" -> Notifs.reply(ctx, a.getInt("index"), a.getString("message"))
+        "backup_now" -> "백업함: " + Backup.save(ctx)
         "hide_apps" -> {
             val arr = a.getJSONArray("apps"); val hide = a.optBoolean("hidden", true)
             val done = mutableListOf<String>(); val failed = mutableListOf<String>()
@@ -270,7 +297,7 @@ class PhoneTools(private val ctx: Context) {
             store.folderOrder().joinToString("\n") { f ->
                 val names = apps.filter { assign[it.pkg] == f }.map { it.label }
                 "$f (${names.size}): " + names.joinToString(", ")
-            }
+            } + "\n폴더 밖: " + apps.filter { assign[it.pkg] == Folders.TOP }.joinToString(", ") { it.label }
         }
         "move_apps_to_folder" -> {
             val arr = a.getJSONArray("apps"); val folder = a.getString("folder").trim()

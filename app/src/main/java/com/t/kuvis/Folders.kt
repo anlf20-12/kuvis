@@ -8,6 +8,18 @@ import org.json.JSONObject
 /** 전체 앱 폴더 정리 */
 object Folders {
 
+    /** 폴더 밖(폴더 아래에 따로 보이는 앱) */
+    const val TOP = "_top"
+
+    /** T가 폴더 밖에 두기로 한 앱 (이름·패키지로 찾음) */
+    private val TOP_KEYS = listOf("mybox", "ndrive", "내 파일", "myfiles", "갤러리", "gallery3d", "play 스토어", "com.android.vending",
+        "솜노트", "app.notes", "헤이홈", "heyhome", "goqual", "tapo", "tplink", "qcy", "accuweather")
+
+    fun isTopDefault(label: String, pkg: String): Boolean {
+        val s = "$label $pkg".lowercase()
+        return TOP_KEYS.any { s.contains(it) }
+    }
+
     val DEFAULT = listOf("교회·성경", "소통", "금융", "쇼핑·배달", "미디어", "생활·교통", "업무·문서", "도구·기타")
 
     /** 앞에 있는 규칙이 먼저 맞으면 그 폴더 (이름 + 패키지명을 소문자로 보고 찾음) */
@@ -46,9 +58,15 @@ object Folders {
         val order = store.folderOrder()
         val saved = store.folderAssign().toMutableMap()
         var changed = false
+        // 한 번만: 정해 둔 9개 앱을 폴더 밖으로
+        if (store.rawGet("topSeeded") == null) {
+            for (a in apps) if (isTopDefault(a.label, a.pkg)) saved[a.pkg] = TOP
+            store.rawPut("topSeeded", "1")
+            changed = true
+        }
         for (a in apps) {
             val cur = saved[a.pkg]
-            if (cur == null || cur !in order) {
+            if (cur == null || (cur != TOP && cur !in order)) {
                 val g = guess(a.label, a.pkg, a.category)
                 saved[a.pkg] = if (g in order) g else order.last()
                 changed = true
@@ -62,7 +80,9 @@ object Folders {
     fun resortAll(ctx: Context, apps: List<AppEntry>) {
         val store = Store(ctx)
         val order = store.folderOrder()
-        val m = apps.associate { a -> a.pkg to guess(a.label, a.pkg, a.category).let { if (it in order) it else order.last() } }
+        val m = apps.associate { a ->
+            a.pkg to (if (isTopDefault(a.label, a.pkg)) TOP else guess(a.label, a.pkg, a.category).let { if (it in order) it else order.last() })
+        }
         store.setFolderAssign(m)
     }
 }
@@ -87,7 +107,10 @@ fun Store.setFolderAssign(m: Map<String, String>) {
     rawPut("folderAssign", o.toString())
 }
 
+/** folder가 "밖"·"폴더 밖"이면 폴더 밖으로 */
 fun Store.moveToFolder(pkg: String, folder: String) {
+    val f = if (folder in listOf(Folders.TOP, "밖", "폴더 밖", "바깥", "폴더밖")) Folders.TOP else folder
+    if (f == Folders.TOP) { setFolderAssign(folderAssign() + (pkg to Folders.TOP)); return }
     val order = folderOrder()
     if (folder !in order) setFolderOrder(order + folder)
     setFolderAssign(folderAssign() + (pkg to folder))
@@ -112,3 +135,11 @@ fun Store.setHidden(pkg: String, hidden: Boolean) {
     if (hidden) cur.add(pkg) else cur.remove(pkg)
     rawPut("hiddenApps", JSONArray(cur.toList()).toString())
 }
+
+// ---------- 쿠비스가 기억하는 것 ----------
+fun Store.memory(): List<String> {
+    val s = rawGet("memory") ?: return emptyList()
+    return try { val a = JSONArray(s); List(a.length()) { a.getString(it) } } catch (_: Exception) { emptyList() }
+}
+
+fun Store.setMemory(list: List<String>) = rawPut("memory", JSONArray(list.takeLast(80)).toString())

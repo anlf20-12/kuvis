@@ -156,6 +156,19 @@ class HomeActivity : Activity() {
         super.onResume()
         refreshAll()
         Updater.checkQuietly(this)
+        Backup.autoDaily(this)
+        val pp = Prefs(this).p
+        if (pp.getBoolean("crashedLastTime", false)) {
+            pp.edit().putBoolean("crashedLastTime", false).apply()
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("쿠비스가 멈췄었어요")
+                .setMessage("오류 기록을 Claude에게 보내 주시면 고칠 수 있어요.")
+                .setPositiveButton("보내기") { _, _ ->
+                    safeStart(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, "쿠비스 오류 기록\n\n" + ErrorLog.read(this).takeLast(20000)), "오류 기록 보내기"))
+                }
+                .setNegativeButton("나중에", null).show()
+        }
         Thread {
             val w = Weather.get(this)
             runOnUiThread { centerPage.setWeather(w) }
@@ -465,9 +478,13 @@ class HomeActivity : Activity() {
                     }
                     "폴더 옮기기" -> {
                         val order = store.folderOrder()
+                        val choices = order + "폴더 밖 (맨 아래)"
                         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                             .setTitle("${app.label} → 어느 폴더로?")
-                            .setItems(order.toTypedArray()) { _, f -> store.moveToFolder(app.pkg, order[f]); appAdapter.filter(search.text.toString()) }
+                            .setItems(choices.toTypedArray()) { _, f ->
+                                store.moveToFolder(app.pkg, if (f < order.size) order[f] else Folders.TOP)
+                                appAdapter.filter(search.text.toString())
+                            }
                             .show()
                     }
                     "숨기기" -> {
@@ -566,7 +583,8 @@ class HomeActivity : Activity() {
             shown = when {
                 k.isNotEmpty() -> apps.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
                 openFolder != null -> apps.filter { assign[it.pkg] == openFolder }.map { Cell(null, emptyList(), it) }
-                else -> store.folderOrder().map { f -> Cell(f, apps.filter { assign[it.pkg] == f }, null) }
+                else -> store.folderOrder().map { f -> Cell(f, apps.filter { assign[it.pkg] == f }, null) } +
+                        apps.filter { assign[it.pkg] == Folders.TOP }.map { Cell(null, emptyList(), it) }
             }
             if (::folderTitle.isInitialized) {
                 val f = openFolder

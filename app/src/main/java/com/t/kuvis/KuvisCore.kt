@@ -39,7 +39,8 @@ import java.util.TimeZone
 class Prefs(ctx: Context) {
     val p: SharedPreferences = ctx.getSharedPreferences("kuvis", Context.MODE_PRIVATE)
     val key get() = p.getString("key", "") ?: ""
-    val model get() = p.getString("model", "claude-sonnet-5-5") ?: "claude-sonnet-5-5"
+    /** "auto" = 간단한 명령은 Haiku, 나머지는 Sonnet */
+    val model get() = p.getString("model", "auto") ?: "auto"
     val rate get() = p.getFloat("rate", 1.1f)
     val useSearch get() = p.getBoolean("search", true)
     var loop: Boolean
@@ -84,6 +85,16 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     private var turnText = StringBuilder()
     private var turnActive = false
     private var needSpace = false
+    private var turnModel = "claude-sonnet-5-5"
+
+    /** 간단한 명령인지 대충 가늠 (짧고 명령어가 들어 있음) */
+    private fun pickModel(userText: String): String {
+        val m = prefs.model
+        if (m != "auto") return m
+        val t = userText.replace(" ", "")
+        val simple = t.length <= 30 && Regex("(켜|꺼|알람|타이머|열어|넣어|추가|메모|할일|완료|끝났|일정|볼륨|손전등|배터리|날씨|비와|몇시|전화|문자|숨겨|옮겨|보여|틀어|지워)").containsMatchIn(t)
+        return if (simple) "claude-haiku-5-5" else "claude-sonnet-5-5"
+    }
     private var splitter = Splitter { }
     var askingPermission = false; private set
 
@@ -216,7 +227,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> goIdle("마이크 권한을 허용해 주세요")
                     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
                         goIdle("인터넷 연결을 확인해 주세요")
-                    else -> goIdle("음성 인식이 멈췄어요 ($error). 다시 눌러 주세요")
+                    else -> { ErrorLog.add(act, "음성 인식 오류", "code=$error"); goIdle("음성 인식이 멈췄어요 ($error). 다시 눌러 주세요") }
                 }
             }
         })
@@ -360,6 +371,10 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             "현재 시각: ${fmt.format(Date())} (한국)."
         )
         if (prefs.extra.isNotBlank()) lines.add("T가 알려 둔 것: ${prefs.extra}")
+        val mem = Store(act).memory()
+        if (mem.isNotEmpty()) lines.add("T에 대해 기억하고 있는 것(필요할 때만 자연스럽게 쓴다):\n" + mem.joinToString("\n") { "- $it" })
+        lines.add("T가 '기억해 줘'라고 하거나 앞으로도 알아야 할 사실을 말하면 remember 도구로 저장한다. 잊어 달라고 하면 forget.")
+        lines.add("알림(카톡 등) 읽기·답장: read_notifications, reply_notification. 답장은 보내기 전에 누구에게 무엇을 보낼지 말하고 확인받는다.")
         return lines.joinToString("\n")
     }
 
@@ -385,7 +400,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             )
         }
         return JSONObject()
-            .put("model", prefs.model)
+            .put("model", turnModel)
             .put("max_tokens", 2000)
             .put("system", systemPrompt())
             .put("messages", msgs)
@@ -425,6 +440,10 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 if (!line.startsWith("data:")) continue
                 val j = try { JSONObject(line.substring(5).trim()) } catch (_: Exception) { continue }
                 when (j.optString("type")) {
+                    "message_start" -> {
+                        val u = j.optJSONObject("message")?.optJSONObject("usage")
+                        if (u != null) Usage.add(act, turnModel, u.optLong("input_tokens") + u.optLong("cache_read_input_tokens") + u.optLong("cache_creation_input_tokens"), 0)
+                    }
                     "content_block_start" -> {
                         val idx = j.getInt("index")
                         val b = JSONObject(j.getJSONObject("content_block").toString())
@@ -462,6 +481,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                         }
                     }
                     "message_delta" -> {
+                        j.optJSONObject("usage")?.let { u -> Usage.add(act, turnModel, 0, u.optLong("output_tokens")) }
                         val sr = j.optJSONObject("delta")?.optString("stop_reason") ?: ""
                         if (sr.isNotBlank() && sr != "null") stop = sr
                     }
@@ -496,6 +516,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         streamDone = false
         val myGen = ++gen
         val apiKey = prefs.key
+        turnModel = pickModel(history.lastOrNull { it.first == "user" }?.second ?: "")
         val msgs = startMessages()
 
         turnBubble = panel.addMsg("assistant", "…")
@@ -523,6 +544,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                         try {
                             res.put("content", phone.execute(b.optString("name"), b.optJSONObject("input") ?: JSONObject()))
                         } catch (e: Exception) {
+                            if (e !is SecurityException) ErrorLog.add(act, "도구 실패: ${b.optString("name")}", (e.message ?: e.toString()) + "\n입력: " + (b.optJSONObject("input")?.toString()?.take(500) ?: ""))
                             res.put("content", "실패: " + (e.message ?: e.toString())).put("is_error", true)
                         }
                         results.put(res)
@@ -555,6 +577,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 else -> "오류: $err"
             }
             panel.addMsg("error", msg)
+            ErrorLog.add(act, "Claude 호출 실패 ($turnModel)", err)
             speakQuick(msg.substringBefore("."))
             goIdle()
             return
@@ -623,5 +646,33 @@ class Splitter(private val onSentence: (String) -> Unit) {
             if ((ch == '.' || ch == '!' || ch == '?' || ch == '…') && buf[i + 1].isWhitespace()) return i
         }
         return -1
+    }
+}
+
+/** 이번 달 모델별 토큰 사용량 */
+object Usage {
+    private fun month() = SimpleDateFormat("yyyy-MM", Locale.KOREA).format(Date())
+
+    @Synchronized
+    fun add(ctx: Context, model: String, input: Long, output: Long) {
+        if (input == 0L && output == 0L) return
+        val p = Prefs(ctx).p
+        val k = "usage_${month()}_$model"
+        val o = try { JSONObject(p.getString(k, "{}") ?: "{}") } catch (_: Exception) { JSONObject() }
+        o.put("in", o.optLong("in") + input).put("out", o.optLong("out") + output)
+        if (input > 0) o.put("calls", o.optLong("calls") + 1)
+        p.edit().putString(k, o.toString()).apply()
+    }
+
+    /** 사람이 읽을 요약 */
+    fun summary(ctx: Context): String {
+        val p = Prefs(ctx).p
+        val m = month()
+        val lines = listOf("claude-haiku-5-5" to "Haiku", "claude-sonnet-5-5" to "Sonnet", "claude-opus-5-5" to "Opus").mapNotNull { (id, name) ->
+            val s = p.getString("usage_${m}_$id", null) ?: return@mapNotNull null
+            val o = try { JSONObject(s) } catch (_: Exception) { return@mapNotNull null }
+            "$name: 호출 ${o.optLong("calls")}번 · 읽은 양 ${"%,d".format(o.optLong("in"))} · 쓴 양 ${"%,d".format(o.optLong("out"))} 토큰"
+        }
+        return if (lines.isEmpty()) "이번 달(${m}) 아직 사용 기록이 없어요." else "이번 달(${m})\n" + lines.joinToString("\n")
     }
 }

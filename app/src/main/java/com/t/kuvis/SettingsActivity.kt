@@ -56,6 +56,8 @@ class SettingsActivity : Activity() {
     private lateinit var box: LinearLayout
     private lateinit var setupBox: LinearLayout
     private lateinit var hiddenBox: LinearLayout
+    private lateinit var memoryBox: LinearLayout
+    private lateinit var errorBox: LinearLayout
     private lateinit var voiceList: LinearLayout
     private lateinit var keyEt: EditText
     private lateinit var extraEt: EditText
@@ -78,6 +80,12 @@ class SettingsActivity : Activity() {
 
         box.addView(txt("쿠비스 설정", 24f, C.text, bold = true))
         box.addView(txt("바꾼 내용은 바로 저장돼요.", 13f, C.dim).apply { setPadding(0, dp(4), 0, 0) })
+        if (prefs.key.isBlank()) {
+            box.addView(txt("처음 설정: 아래 '휴대폰에 쿠비스 연결'의 항목을 위에서부터 하나씩 ✓로 바꾸고, Claude 칸에 API 키를 넣으면 끝이에요.",
+                14f, Color.parseColor("#04121F")).apply {
+                background = rounded(C.accent, dpf(12f)); setPadding(dp(14), dp(12), dp(14), dp(12))
+            }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(12) })
+        }
 
         // 1. 기본 설정
         setupBox = section("휴대폰에 쿠비스 연결")
@@ -87,9 +95,19 @@ class SettingsActivity : Activity() {
         buildVoice(section("목소리와 대화"))
         // 4. 할 수 있는 일
         buildAbilities(section("쿠비스가 할 수 있는 일"))
+        // 4-1. 기억
+        memoryBox = section("쿠비스가 기억하는 것")
+        refreshMemory()
+        // 4-2. 사용량
+        buildUsage(section("이번 달 사용량"))
         // 5. 숨긴 앱
         hiddenBox = section("숨긴 앱")
         refreshHidden()
+        // 5-1. 백업
+        buildBackup(section("백업"))
+        // 5-2. 오류 기록
+        errorBox = section("오류 기록")
+        refreshErrors()
         // 6. 기타
         buildEtc(section("기타"))
 
@@ -100,6 +118,8 @@ class SettingsActivity : Activity() {
         super.onResume()
         refreshSetup()
         if (::hiddenBox.isInitialized) refreshHidden()
+        if (::memoryBox.isInitialized) refreshMemory()
+        if (::errorBox.isInitialized) refreshErrors()
     }
 
     override fun onPause() {
@@ -236,6 +256,15 @@ class SettingsActivity : Activity() {
             }
         }
 
+        val notif = KuvisNotifService.enabled(this)
+        setupRow("알림 읽기·답장 (카톡 등)", notif, "허용됨", "'쿠비스'의 알림 접근을 켜 주세요", if (notif) null else "열기") {
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage("다음 화면에서 '쿠비스'를 켜 주세요.\n\n회색으로 막혀 있으면: 앱 정보 화면 오른쪽 위 ⋮ → '제한된 설정 허용'을 먼저 누른 뒤 다시 하세요.")
+                .setPositiveButton("알림 접근 열기") { _, _ -> startSafe(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+                .setNeutralButton("앱 정보 열기") { _, _ -> startSafe(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }
+                .show()
+        }
+
         val usage = usageAllowed()
         setupRow("사용 기록 접근 (오래 안 쓴 앱 찾기)", usage, "허용됨", "앱 정리를 쓰려면 '쿠비스'를 허용해 주세요",
             if (usage) null else "열기") { startSafe(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }
@@ -305,8 +334,8 @@ class SettingsActivity : Activity() {
         c.addView(txt("키는 이 휴대폰 안에만 저장되고 Anthropic 서버로만 보내져요.", 12f, C.dim))
 
         c.addView(label("모델"))
-        val ids = listOf("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5")
-        val names = listOf("Haiku 5.5 — 가장 빠르고 저렴", "Sonnet 5.5 — 균형 (추천)", "Opus 5.5 — 가장 똑똑, 비쌈")
+        val ids = listOf("auto", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5")
+        val names = listOf("자동 (추천) — 간단한 명령은 Haiku, 나머지는 Sonnet", "Haiku 5.5만 — 가장 빠르고 저렴", "Sonnet 5.5만 — 균형", "Opus 5.5만 — 가장 똑똑, 비쌈")
         val rg = RadioGroup(this)
         ids.forEachIndexed { i, id ->
             rg.addView(RadioButton(this).apply {
@@ -464,6 +493,8 @@ class SettingsActivity : Activity() {
             "⏰ 알람·타이머" to listOf("내일 아침 6시 알람", "라면 3분 타이머"),
             "📱 앱" to listOf("유튜브 열어 줘", "안 쓰는 앱 정리하자", "넷플릭스 숨겨 줘", "카카오T를 생활 폴더로 옮겨 줘", "금융 폴더 이름을 은행으로 바꿔 줘", "고정줄에 카카오톡 넣어 줘", "메모 페이지 보여 줘"),
             "📞 연락" to listOf("○○ 전도사님께 전화해 줘 (확인 후 걸어요)", "○○에게 '조금 늦어요' 문자 보내 줘 (확인 후 보내요)"),
+            "💬 알림" to listOf("카톡 온 거 읽어 줘", "방금 카톡에 '곧 갈게'라고 답해 줘 (확인 후 보내요)"),
+            "🧠 기억" to listOf("기억해 줘, 다누 어린이집은 ○○이야", "내 차 번호 기억해?", "어린이집 기억 지워 줘"),
             "🔦 기기" to listOf("손전등 켜 줘", "볼륨 50으로", "배터리 얼마야?", "와이파이 설정 열어 줘"),
             "🔎 그 밖에" to listOf("오늘 뉴스 알려 줘 (웹 검색)", "로마서 8장 28절이 어떤 내용이야?", "그만 / 새 대화")
         )
@@ -471,8 +502,88 @@ class SettingsActivity : Activity() {
             c.addView(txt(title, 15f, C.text, bold = true).apply { setPadding(0, dp(10), 0, dp(2)) })
             for (e in examples) c.addView(txt("“$e”", 14f, C.dim).apply { setPadding(dp(8), dp(1), 0, dp(1)) })
         }
-        c.addView(txt("\n안 되는 것: 다른 앱 안의 버튼 누르기(예: 카톡 보내기)는 아직 못 해요.",
+        c.addView(txt("\n안 되는 것: 알림이 없는 상태에서 다른 앱 안의 버튼 누르기(예: 카톡 새 대화 시작)는 아직 못 해요.",
             12f, C.dim))
+    }
+
+    // =====================================================================
+    // 기억 · 사용량 · 백업 · 오류
+    private fun refreshMemory() {
+        memoryBox.removeAllViews()
+        val store = Store(this)
+        val mem = store.memory()
+        if (mem.isEmpty()) {
+            memoryBox.addView(txt("아직 없어요. 쿠비스에게 \"기억해 줘, ○○\"라고 말하면 여기 쌓여요.", 13f, C.dim)); return
+        }
+        for (m in mem) {
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, 0) }
+            row.addView(txt(m, 14f, C.text), LinearLayout.LayoutParams(0, WRAP, 1f))
+            row.addView(button("지우기") { store.setMemory(store.memory() - m); refreshMemory() })
+            memoryBox.addView(row)
+        }
+    }
+
+    private fun buildUsage(c: LinearLayout) {
+        c.addView(txt(Usage.summary(this), 14f, C.text))
+        c.addView(txt("토큰은 글자 조각 수예요. 실제 금액과 남은 크레딧은 아래 버튼에서 확인하세요.", 12f, C.dim).apply { setPadding(0, dp(6), 0, 0) })
+        c.addView(button("사용 금액 보기") { startSafe(Intent(Intent.ACTION_VIEW, Uri.parse("https://platform.claude.com/usage"))) },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
+    }
+
+    private fun buildBackup(c: LinearLayout) {
+        c.addView(txt("할 일·메모·기억·폴더를 하루 한 번 휴대폰 '다운로드/쿠비스' 폴더에 자동으로 저장해요. 휴대폰을 바꾸면 그 파일을 옮겨서 불러오면 돼요.", 13f, C.dim))
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+        row.addView(button("지금 백업", primary = true) {
+            Thread {
+                val msg = try { "저장했어요: " + Backup.save(this) } catch (e: Exception) { "백업 실패: ${e.message}" }
+                runOnUiThread { android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show() }
+            }.start()
+        })
+        row.addView(button("백업 불러오기") {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), 21)
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+        c.addView(row)
+        c.addView(button("다른 곳으로 보내기 (카톡·드라이브 등)") {
+            startSafe(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, "쿠비스 백업").putExtra(Intent.EXTRA_TEXT, Backup.exportJson(this)), "백업 보낼 곳"))
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data
+        if (requestCode != 21 || resultCode != RESULT_OK || uri == null) return
+        val text = try { contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: "" } catch (_: Exception) { "" }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setMessage("이 백업으로 할 일·메모·기억·폴더를 바꿀까요? 지금 것은 덮어써져요.")
+            .setPositiveButton("불러오기") { _, _ ->
+                val msg = try { Backup.restore(this, text); "불러왔어요." } catch (e: Exception) { "불러오지 못했어요: ${e.message}" }
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
+                refreshMemory(); refreshHidden()
+            }
+            .setNegativeButton("취소", null).show()
+    }
+
+    private fun refreshErrors() {
+        errorBox.removeAllViews()
+        val log = ErrorLog.read(this)
+        if (log.isBlank()) { errorBox.addView(txt("오류 기록이 없어요. 👍", 13f, C.dim)); return }
+        val count = Regex("^=== ", RegexOption.MULTILINE).findAll(log).count()
+        errorBox.addView(txt("기록 ${count}개. 이상한 점이 있으면 'Claude에게 보내기'를 눌러 이 대화창에 붙여 주세요.", 13f, C.dim))
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(10), 0, 0) }
+        row.addView(button("Claude에게 보내기", primary = true) {
+            startSafe(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(Intent.EXTRA_TEXT, "쿠비스 오류 기록\n\n" + log.takeLast(20000)), "오류 기록 보내기"))
+        })
+        row.addView(button("보기") {
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setMessage(log.takeLast(6000)).setPositiveButton("닫기", null).show()
+        }, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+        row.addView(button("지우기") { ErrorLog.clear(this); refreshErrors() },
+            LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+        errorBox.addView(row)
     }
 
     // =====================================================================
