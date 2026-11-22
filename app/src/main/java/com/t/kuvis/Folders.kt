@@ -138,7 +138,33 @@ fun Store.renameFolder(from: String, to: String): Boolean {
     if (from !in order || to.isBlank()) return false
     setFolderOrder(order.map { if (it == from) to else it })
     setFolderAssign(folderAssign().mapValues { if (it.value == from) to else it.value })
+    setDrawerOrder(drawerOrder().map { if (it == "f:$from") "f:$to" else it })
+    rawGet("forder_$from")?.let { rawPut("forder_$to", it) }
     return true
+}
+
+// ---------- 서랍·폴더 안 순서 (손으로 옮긴 순서) ----------
+/** 서랍 맨 위 단계 순서. 열쇠는 "f:폴더이름" 또는 "a:패키지" */
+fun Store.drawerOrder(): List<String> {
+    val s = rawGet("drawerOrder") ?: return emptyList()
+    return try { val a = JSONArray(s); List(a.length()) { a.getString(it) } } catch (_: Exception) { emptyList() }
+}
+
+fun Store.setDrawerOrder(keys: List<String>) = rawPut("drawerOrder", JSONArray(keys.distinct()).toString())
+
+fun Store.folderAppOrder(folder: String): List<String> {
+    val s = rawGet("forder_$folder") ?: return emptyList()
+    return try { val a = JSONArray(s); List(a.length()) { a.getString(it) } } catch (_: Exception) { emptyList() }
+}
+
+fun Store.setFolderAppOrder(folder: String, pkgs: List<String>) = rawPut("forder_$folder", JSONArray(pkgs.distinct()).toString())
+
+/** 저장된 순서대로, 순서에 없는 건 원래 순서대로 뒤에 */
+fun <T> orderBy(items: List<T>, saved: List<String>, key: (T) -> String): List<T> {
+    if (saved.isEmpty()) return items
+    val rank = saved.withIndex().associate { it.value to it.index }
+    val known = items.filter { key(it) in rank }.sortedBy { rank[key(it)] }
+    return known + items.filter { key(it) !in rank }
 }
 
 // ---------- 숨긴 앱 ----------

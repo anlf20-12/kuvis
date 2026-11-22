@@ -86,6 +86,8 @@ class HomeActivity : Activity() {
     private lateinit var folderLayer: FrameLayout
     private lateinit var folderTitle: TextView
     private lateinit var folderList: RecyclerView
+    private lateinit var folderCard: LinearLayout
+    private lateinit var homeZone: TextView
     private val folderAdapter = AppAdapter(inFolder = true)
     private var openFolder: String? = null
 
@@ -165,6 +167,11 @@ class HomeActivity : Activity() {
             visibility = View.GONE
         }
         overlay.addView(deleteBar, FrameLayout.LayoutParams(MATCH, dp(56)).apply { setMargins(dp(24), dp(8), dp(24), 0) })
+        homeZone = txt("⌂  여기에 잠깐 대면 홈 화면으로", 15f, Color.WHITE, bold = true, gravity = Gravity.CENTER).apply {
+            background = rounded(Color.argb(190, 30, 64, 120), dpf(18f))
+            visibility = View.GONE
+        }
+        overlay.addView(homeZone, FrameLayout.LayoutParams(MATCH, dp(56)).apply { setMargins(dp(24), dp(8), dp(24), 0) })
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
 
         setContentView(root)
@@ -225,6 +232,7 @@ class HomeActivity : Activity() {
     override fun onPause() {
         super.onPause()
         endDrag(cancel = true)
+        endDrawerDrag()
         endResize()
     }
 
@@ -668,6 +676,7 @@ class HomeActivity : Activity() {
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         lastRawX = ev.rawX; lastRawY = ev.rawY
         if (drag != null) return handleDrag(ev)
+        if (ddrag != null) return handleDrawerDrag(ev)
         if (resize != null) return handleResize(ev)
         if (openFolder != null) return super.dispatchTouchEvent(ev)
         when (ev.actionMasked) {
@@ -832,13 +841,6 @@ class HomeActivity : Activity() {
             }.show()
     }
 
-    /** 서랍·폴더의 앱을 길게 누름 → 움직이면 홈으로 끌기, 안 움직이고 떼면 메뉴 */
-    private fun onDrawerAppLongPress(app: AppEntry) {
-        val size = dp(64)
-        startDrag(GridItem("app", app.pkg, 0, 0, 1, 1), null, null, size, size, size / 2f, size / 2f,
-            lastRawX, lastRawY, null, icon = app.icon) { appMenu(app) }
-    }
-
     // =====================================================================
     // 앱 서랍 (삼성식: 흐린 배경, 아래 검색창, 폴더 창)
     private fun blurSupported(): Boolean =
@@ -865,6 +867,7 @@ class HomeActivity : Activity() {
         })
         drawerColumn.addView(top)
         appList = RecyclerView(this).apply {
+            (itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
             layoutManager = GridLayoutManager(this@HomeActivity, 4)
             adapter = appAdapter
             setPadding(dp(8), dp(4), dp(8), dp(8)); clipToPadding = false
@@ -922,12 +925,14 @@ class HomeActivity : Activity() {
         })
         col.addView(addRow, LinearLayout.LayoutParams(MATCH, WRAP).apply { rightMargin = dp(28) })
         val card = LinearLayout(this).apply {
+            folderCard = this
             orientation = LinearLayout.VERTICAL
             background = rounded(Color.argb(200, 58, 52, 52), dpf(34f))
             setPadding(dp(14), dp(18), dp(14), dp(18))
             isClickable = true // 카드 안을 눌러도 안 닫힘
         }
         folderList = RecyclerView(this).apply {
+            (itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
             layoutManager = GridLayoutManager(this@HomeActivity, 4)
             adapter = folderAdapter
         }
@@ -1056,29 +1061,256 @@ class HomeActivity : Activity() {
             .setNegativeButton("취소", null).show()
     }
 
+    // ---------- 서랍·폴더 안에서 끌어 옮기기 ----------
+    private class DrawerDrag(
+        val cell: Cell, val float: ImageView, val grabX: Float, val grabY: Float,
+        val startX: Float, val startY: Float, var folder: String?, val onTap: () -> Unit
+    ) {
+        var moved = false
+        var cancelSent = false
+        var hover: String? = null
+        var zoneSince = 0L
+        var outSince = 0L
+        var lastMove = 0L
+    }
+
+    private var ddrag: DrawerDrag? = null
+
+    private val autoScroll = object : Runnable {
+        override fun run() {
+            val d = ddrag ?: return
+            if (d.moved && d.folder == null) {
+                val loc = IntArray(2); appList.getLocationOnScreen(loc)
+                val ly = lastRawY - loc[1]
+                val edge = dp(64)
+                val dy = when {
+                    ly < edge && ly > -dp(10) -> -dp(12)
+                    ly > appList.height - edge -> dp(12)
+                    else -> 0
+                }
+                if (dy != 0 && appList.canScrollVertically(if (dy < 0) -1 else 1)) {
+                    appList.scrollBy(0, dy)
+                    updateDrawerTarget(lastRawX, lastRawY)
+                }
+            }
+            main.postDelayed(this, 16)
+        }
+    }
+
+    private fun inView(v: View, rawX: Float, rawY: Float): Boolean {
+        if (!v.isShown) return false
+        val l = IntArray(2); v.getLocationOnScreen(l)
+        return rawX >= l[0] && rawX <= l[0] + v.width && rawY >= l[1] && rawY <= l[1] + v.height
+    }
+
+    private fun placeFloat(v: View, grabX: Float, grabY: Float, rawX: Float, rawY: Float) {
+        val loc = IntArray(2); overlay.getLocationOnScreen(loc)
+        v.x = rawX - grabX - loc[0]; v.y = rawY - grabY - loc[1]
+    }
+
+    /** 서랍·폴더 칸을 길게 누름 → 그 안에서 끌어 옮기기 (안 움직이고 떼면 메뉴) */
+    private fun startDrawerDrag(h: AppAdapter.VH, cell: Cell) {
+        val tap: () -> Unit = { if (cell.app != null) appMenu(cell.app) else cell.folder?.let { renameFolderDialog(it) } }
+        if (search.text.isNotEmpty()) { tap(); return } // 검색 중엔 옮기기 없이 메뉴
+        val box = h.box
+        val loc = IntArray(2); box.getLocationOnScreen(loc)
+        val iv = ImageView(this).apply {
+            setImageBitmap(snapshot(box)); alpha = 0f; scaleX = 1.1f; scaleY = 1.1f; elevation = dpf(12f)
+        }
+        overlay.addView(iv, FrameLayout.LayoutParams(box.width, box.height))
+        val d = DrawerDrag(cell, iv, lastRawX - loc[0], lastRawY - loc[1], lastRawX, lastRawY, openFolder, tap)
+        ddrag = d
+        placeFloat(iv, d.grabX, d.grabY, lastRawX, lastRawY)
+    }
+
+    private fun handleDrawerDrag(ev: MotionEvent): Boolean {
+        val d = ddrag ?: return false
+        if (!d.cancelSent) {
+            d.cancelSent = true
+            val c = MotionEvent.obtain(ev); c.action = MotionEvent.ACTION_CANCEL
+            super.dispatchTouchEvent(c); c.recycle()
+        }
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                if (!d.moved && hypot(ev.rawX - d.startX, ev.rawY - d.startY) > touchSlop * 2) {
+                    d.moved = true
+                    d.float.alpha = 0.95f
+                    adapterOf(d).setDragging(d.cell.key)
+                    if (d.cell.app != null) { homeZone.alpha = 0.8f; homeZone.visibility = View.VISIBLE }
+                    main.post(autoScroll)
+                }
+                if (d.moved) {
+                    placeFloat(d.float, d.grabX, d.grabY, ev.rawX, ev.rawY)
+                    updateDrawerTarget(ev.rawX, ev.rawY)
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (!d.moved) { endDrawerDrag(); if (ev.actionMasked == MotionEvent.ACTION_UP) d.onTap() }
+                else dropDrawer()
+            }
+        }
+        return true
+    }
+
+    private fun adapterOf(d: DrawerDrag) = if (d.folder != null) folderAdapter else appAdapter
+
+    private fun updateDrawerTarget(rawX: Float, rawY: Float) {
+        val d = ddrag ?: return
+        val now = System.currentTimeMillis()
+        // 위쪽 '홈 화면으로' 칸에 잠깐 대면 홈으로 넘어감
+        if (d.cell.app != null && inView(homeZone, rawX, rawY)) {
+            homeZone.alpha = 1f
+            if (d.zoneSince == 0L) d.zoneSince = now
+            if (now - d.zoneSince > 350) toHomeDrag()
+            return
+        }
+        d.zoneSince = 0L
+        homeZone.alpha = 0.8f
+        // 폴더 창 밖으로 끌면 폴더에서 꺼냄
+        if (d.folder != null) {
+            if (!inView(folderCard, rawX, rawY)) {
+                if (d.outSince == 0L) d.outSince = now
+                if (now - d.outSince > 250) pullOutOfFolder()
+                return
+            }
+            d.outSince = 0L
+        }
+        val adapter = adapterOf(d)
+        val rv = if (d.folder != null) folderList else appList
+        val loc = IntArray(2); rv.getLocationOnScreen(loc)
+        val lx = rawX - loc[0]; val ly = rawY - loc[1]
+        val child = rv.findChildViewUnder(lx, ly)
+        var pos = if (child != null) rv.getChildAdapterPosition(child) else RecyclerView.NO_POSITION
+        var hover: String? = null
+        if (child != null && pos != RecyclerView.NO_POSITION) {
+            val target = adapter.cellAt(pos)
+            if (d.folder == null && d.cell.app != null && target.folder != null) {
+                val vh = rv.getChildViewHolder(child) as AppAdapter.VH
+                val il = IntArray(2); vh.icon.getLocationOnScreen(il)
+                val m = vh.icon.width * 0.1f
+                if (rawX > il[0] - m && rawX < il[0] + vh.icon.width + m && rawY > il[1] - m && rawY < il[1] + vh.icon.height + m) hover = target.folder
+            }
+        } else if (child == null && rv.childCount > 0 && ly > rv.getChildAt(rv.childCount - 1).bottom) {
+            pos = adapter.itemCount - 1
+        }
+        d.hover = hover
+        adapter.setHover(hover)
+        if (hover == null && pos != RecyclerView.NO_POSITION && now - d.lastMove > 120) {
+            val from = adapter.indexOfKey(d.cell.key)
+            if (from >= 0 && from != pos) {
+                d.lastMove = now
+                val lm = rv.layoutManager as GridLayoutManager
+                val first = lm.findFirstVisibleItemPosition()
+                val top = (rv.getChildAt(0)?.top ?: 0) - rv.paddingTop
+                adapter.move(from, pos)
+                if (first == from || first == pos) lm.scrollToPositionWithOffset(first, top)
+            }
+        }
+    }
+
+    /** 폴더 창 밖으로 끌어냄 → 폴더 밖 앱이 되고, 서랍에서 계속 끌기 */
+    private fun pullOutOfFolder() {
+        val d = ddrag ?: return
+        val app = d.cell.app ?: return
+        val f = d.folder ?: return
+        store.setFolderAppOrder(f, folderAdapter.keys().map { it.removePrefix("a:") }.filter { it != app.pkg })
+        store.moveToFolder(app.pkg, Folders.TOP)
+        d.folder = null
+        d.outSince = 0L
+        closeFolder()
+        appAdapter.setDragging(d.cell.key)
+    }
+
+    /** 서랍에서 끌던 앱을 홈 화면 끌기로 바꿈 */
+    private fun toHomeDrag() {
+        val d = ddrag ?: return
+        val app = d.cell.app ?: return
+        val bmp = (d.float.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+        val w = d.float.width; val h = d.float.height
+        if (d.folder != null) store.setFolderAppOrder(d.folder!!, folderAdapter.keys().map { it.removePrefix("a:") })
+        else store.setDrawerOrder(appAdapter.keys())
+        endDrawerDrag()
+        hideDrawerNow()
+        startDrag(GridItem("app", app.pkg, 0, 0, 1, 1), null, bmp, w, h, d.grabX, d.grabY, lastRawX, lastRawY, null, icon = app.icon) {}
+        drag?.let { it.moved = true; it.cancelSent = true; it.float.alpha = 0.9f }
+        updateTarget(lastRawX, lastRawY)
+    }
+
+    private fun dropDrawer() {
+        val d = ddrag ?: return
+        val hv = d.hover
+        val app = d.cell.app
+        if (hv != null && app != null) {
+            store.moveToFolder(app.pkg, hv)
+            store.setDrawerOrder(appAdapter.keys().filter { it != d.cell.key })
+            toast("'$hv' 폴더에 넣었어요.")
+        } else if (d.folder != null) {
+            store.setFolderAppOrder(d.folder!!, folderAdapter.keys().map { it.removePrefix("a:") })
+        } else {
+            store.setDrawerOrder(appAdapter.keys())
+        }
+        endDrawerDrag()
+    }
+
+    private fun endDrawerDrag() {
+        val d = ddrag ?: return
+        ddrag = null
+        main.removeCallbacks(autoScroll)
+        overlay.removeView(d.float)
+        homeZone.visibility = View.GONE
+        appAdapter.setHover(null); folderAdapter.setHover(null)
+        appAdapter.draggingKey = null; folderAdapter.draggingKey = null
+        appAdapter.filter(search.text.toString())
+        openFolder?.let { folderAdapter.showFolder(it) }
+    }
+
     /** 서랍 칸: 폴더 또는 앱 */
-    private class Cell(val folder: String?, val apps: List<AppEntry>, val app: AppEntry?)
+    private class Cell(val folder: String?, val apps: List<AppEntry>, val app: AppEntry?) {
+        val key: String get() = if (app != null) "a:${app.pkg}" else "f:$folder"
+    }
 
     private inner class AppAdapter(private val inFolder: Boolean) : RecyclerView.Adapter<AppAdapter.VH>() {
-        private var shown: List<Cell> = emptyList()
+        private var shown: MutableList<Cell> = mutableListOf()
+        var draggingKey: String? = null
+        private var hoverFolder: String? = null
 
         inner class VH(val box: LinearLayout, val icon: FrameLayout, val label: TextView) : RecyclerView.ViewHolder(box)
 
-        /** 서랍: 검색어가 있으면 결과, 없으면 폴더 + 폴더 밖 앱 */
+        fun keys() = shown.map { it.key }
+        fun cellAt(i: Int) = shown[i]
+        fun indexOfKey(k: String) = shown.indexOfFirst { it.key == k }
+        fun move(from: Int, to: Int) { val c = shown.removeAt(from); shown.add(to, c); notifyItemMoved(from, to) }
+
+        fun setDragging(k: String?) {
+            val old = draggingKey; draggingKey = k
+            listOfNotNull(old, k).forEach { val i = indexOfKey(it); if (i >= 0) notifyItemChanged(i) }
+        }
+
+        fun setHover(f: String?) {
+            if (f == hoverFolder) return
+            val old = hoverFolder; hoverFolder = f
+            listOfNotNull(old, f).forEach { val i = indexOfKey("f:$it"); if (i >= 0) notifyItemChanged(i) }
+        }
+
+        /** 서랍: 검색어가 있으면 결과, 없으면 폴더 + 폴더 밖 앱 (손으로 옮긴 순서대로) */
         fun filter(q: String) {
             if (inFolder) return
             val k = q.replace(" ", "").lowercase()
             val vis = visibleApps()
             val assign = if (apps.isEmpty()) emptyMap() else Folders.assign(this@HomeActivity, apps)
-            shown = if (k.isNotEmpty()) vis.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }
-            else store.folderOrder().map { f -> Cell(f, vis.filter { assign[it.pkg] == f }, null) } +
-                    vis.filter { assign[it.pkg] == Folders.TOP }.map { Cell(null, emptyList(), it) }
+            shown = if (k.isNotEmpty()) vis.filter { it.label.replace(" ", "").lowercase().contains(k) }.map { Cell(null, emptyList(), it) }.toMutableList()
+            else {
+                val base = store.folderOrder().map { f -> Cell(f, orderBy(vis.filter { assign[it.pkg] == f }, store.folderAppOrder(f)) { it.pkg }, null) } +
+                        vis.filter { assign[it.pkg] == Folders.TOP }.map { Cell(null, emptyList(), it) }
+                orderBy(base, store.drawerOrder()) { it.key }.toMutableList()
+            }
             @Suppress("NotifyDataSetChanged") notifyDataSetChanged()
         }
 
         fun showFolder(name: String) {
             val assign = Folders.assign(this@HomeActivity, apps)
-            shown = visibleApps().filter { assign[it.pkg] == name }.map { Cell(null, emptyList(), it) }
+            shown = orderBy(visibleApps().filter { assign[it.pkg] == name }, store.folderAppOrder(name)) { it.pkg }
+                .map { Cell(null, emptyList(), it) }.toMutableList()
             @Suppress("NotifyDataSetChanged") notifyDataSetChanged()
         }
 
@@ -1099,22 +1331,31 @@ class HomeActivity : Activity() {
                 setPadding(0, dp(5), 0, 0)
             }
             box.addView(label, LinearLayout.LayoutParams(MATCH, WRAP))
-            return VH(box, icon, label)
+            val vh = VH(box, icon, label)
+            box.setOnLongClickListener {
+                val p = vh.bindingAdapterPosition
+                if (p != RecyclerView.NO_POSITION) startDrawerDrag(vh, shown[p])
+                true
+            }
+            return vh
         }
 
         override fun onBindViewHolder(h: VH, position: Int) {
             val c = shown[position]
+            h.box.alpha = if (c.key == draggingKey) 0f else 1f
             h.icon.removeAllViews()
+            h.icon.scaleX = 1f; h.icon.scaleY = 1f
             val app = c.app
             if (app != null) {
                 h.icon.background = null
                 h.icon.addView(ImageView(this@HomeActivity).apply { setImageDrawable(app.icon) }, FrameLayout.LayoutParams(MATCH, MATCH))
                 h.label.text = app.label
                 h.box.setOnClickListener { launch(app.pkg); closeDrawer() }
-                h.box.setOnLongClickListener { onDrawerAppLongPress(app); true }
             } else {
                 val name = c.folder ?: ""
-                h.icon.background = rounded(Color.argb(95, 255, 255, 255), dpf(18f))
+                val hov = name == hoverFolder
+                h.icon.background = rounded(Color.argb(if (hov) 170 else 95, 255, 255, 255), dpf(18f))
+                if (hov) { h.icon.scaleX = 1.15f; h.icon.scaleY = 1.15f }
                 val grid = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(6), dp(6), dp(6), dp(6)) }
                 for (r in 0 until 2) {
                     val row = LinearLayout(this@HomeActivity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1129,7 +1370,6 @@ class HomeActivity : Activity() {
                 h.icon.addView(grid, FrameLayout.LayoutParams(MATCH, MATCH))
                 h.label.text = name
                 h.box.setOnClickListener { openFolderPopup(name) }
-                h.box.setOnLongClickListener { renameFolderDialog(name); true }
             }
         }
     }
