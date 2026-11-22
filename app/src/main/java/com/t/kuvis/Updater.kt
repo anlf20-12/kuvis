@@ -4,7 +4,6 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import org.json.JSONObject
@@ -80,28 +79,16 @@ object Updater {
         val notes = r.notes.lines().filter { it.isNotBlank() && !it.startsWith("Co-Authored") && !it.startsWith("Claude-Session") }
             .take(8).joinToString("\n")
         AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("쿠비스 새 버전이 있어요")
-            .setMessage((if (notes.isNotBlank()) "$notes\n\n" else "") + "지금 업데이트할까요? API 키·할 일·메모는 그대로 남아요.")
-            .setPositiveButton("업데이트") { _, _ -> start(act, r) }
+            .setTitle("쿠비스 새 버전이 나왔어요")
+            .setMessage((if (notes.isNotBlank()) "$notes\n\n" else "") +
+                "Claude 앱의 쿠비스 대화에 보낸 kuvis APK 파일을 눌러 설치하세요.\n" +
+                "(쿠비스나 브라우저로 직접 받으면 휴대폰 보안이 막아요)")
+            .setPositiveButton("Claude 앱 열기") { _, _ ->
+                val i = act.packageManager.getLaunchIntentForPackage("com.anthropic.claude")
+                if (i != null) act.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                else Toast.makeText(act, "Claude 앱을 찾지 못했어요.", Toast.LENGTH_SHORT).show()
+            }
             .setNegativeButton("나중에", null)
             .show()
-    }
-
-    /**
-     * 브라우저로 새 버전 파일을 받게 함.
-     * (쿠비스가 직접 받아서 설치하면 휴대폰 보안이 '악성 앱'으로 의심해 막음)
-     */
-    private fun start(act: Activity, r: Release) {
-        AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setMessage("브라우저에서 새 버전 파일(kuvis.apk)을 받아요.\n\n받기가 끝나면 알림이나 다운로드 목록에서 파일을 눌러 '설치' → '업데이트'를 누르면 돼요.")
-            .setPositiveButton("받기") { _, _ ->
-                try {
-                    act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(r.apkUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                } catch (e: Exception) {
-                    ErrorLog.add(act, "업데이트 받기 화면 열기 실패", e.toString())
-                    Toast.makeText(act, "브라우저를 열지 못했어요: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
-            .setNegativeButton("취소", null).show()
     }
 }
