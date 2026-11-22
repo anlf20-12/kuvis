@@ -114,6 +114,25 @@ class SettingsActivity : Activity() {
         buildEtc(section("기타"))
 
         startTts()
+        scrollToSection(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        scrollToSection(intent)
+    }
+
+    private fun scrollToSection(i: Intent?) {
+        val key = when (i?.getStringExtra("section")) {
+            "voice" -> "목소리와 대화"
+            "claude" -> "Claude (두뇌)"
+            "memory" -> "기억장 (Claude 앱과 함께 쓰기)"
+            "abilities" -> "쿠비스가 할 수 있는 일"
+            "update" -> "기타"
+            else -> return
+        }
+        val v = anchors[key] ?: return
+        (box.parent as? ScrollView)?.post { (box.parent as ScrollView).smoothScrollTo(0, v.top) }
     }
 
     override fun onResume() {
@@ -148,8 +167,12 @@ class SettingsActivity : Activity() {
 
     // =====================================================================
     // 화면 조각
+    private val anchors = mutableMapOf<String, View>()
+
     private fun section(title: String): LinearLayout {
-        box.addView(txt(title, 15f, C.accent, bold = true).apply { setPadding(dp(4), dp(24), 0, dp(8)) })
+        val head = txt(title, 15f, C.accent, bold = true).apply { setPadding(dp(4), dp(24), 0, dp(8)) }
+        box.addView(head)
+        anchors[title] = head
         val c = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(C.panel, dpf(18f), dp(1), C.line)

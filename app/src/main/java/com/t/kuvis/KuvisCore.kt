@@ -365,6 +365,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             "시키는 일은 도구로 직접 한다. 도구를 쓰기 전에는 말하지 말고 바로 쓰고, 끝난 뒤 결과를 한두 문장으로 말한다. 바꾼 페이지를 보여 주면 좋을 때는 show_page를 쓴다.",
             "전화 걸기, 문자 보내기, 일정·할 일·메모 지우기는 실행 전에 무엇을 하는지 말하고 '할까요?'로 확인받는다. 사용자가 그러라고 하면 그때 실행한다.",
             "일정·할 일·메모 추가, 완료 표시, 알람·타이머, 앱 열기, 손전등 같은 건 확인 없이 바로 한다. 날짜와 시간은 아래 현재 시각을 기준으로 계산한다.",
+            "'쿠비스 설정'·'목소리 설정'처럼 쿠비스 자체 설정을 말하면 open_kuvis_settings를 쓴다. 휴대폰의 음성 출력(TTS) 엔진 설정은 open_settings page=tts.",
             "날씨는 get_weather를 먼저 쓰고, 그걸로 모자랄 때만 웹 검색을 쓴다.",
             "앱 정리: 전체 앱 서랍(홈에서 위로 쓸기)은 폴더로 나뉘어 있다. 폴더 옮기기·이름 바꾸기는 list_folders, move_apps_to_folder, rename_folder로 바로 한다. 안 쓰는 앱 지우기는 list_apps(last_used)로 찾아 말해 주고, 지울지 물은 뒤 uninstall_app으로 삭제 창을 띄운다.",
             "성경 구절은 개역개정 본문이 확실할 때만 그대로 인용하고, 확실하지 않으면 장절과 내용 요약만 말한다.",
@@ -468,6 +469,9 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                             }
                             "input_json_delta" ->
                                 partial.getOrPut(idx) { StringBuilder() }.append(d.optString("partial_json"))
+                            // 모델이 답하기 전에 생각한 내용: 다음 요청에 그대로 돌려줘야 함
+                            "thinking_delta" -> b.put("thinking", b.optString("thinking") + d.optString("thinking"))
+                            "signature_delta" -> b.put("signature", b.optString("signature") + d.optString("signature"))
                             "citations_delta" -> {
                                 val arr = b.optJSONArray("citations") ?: JSONArray().also { b.put("citations", it) }
                                 d.optJSONObject("citation")?.let { arr.put(it) }
@@ -491,7 +495,10 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             }
             val content = JSONArray()
             for (b in blocks.values) {
-                if (b.optString("type") == "text" && b.optString("text").isBlank()) continue
+                val bt = b.optString("type")
+                if (bt == "text" && b.optString("text").isBlank()) continue
+                // 내용이 빈 생각 블록은 다시 보내면 거절되므로 뺌
+                if (bt == "thinking" && (b.optString("thinking").isBlank() || b.optString("signature").isBlank())) continue
                 content.put(b)
             }
             return StreamResult(content, stop)

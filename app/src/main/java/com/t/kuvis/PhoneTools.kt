@@ -116,8 +116,12 @@ class PhoneTools(private val ctx: Context) {
             .put(tool("open_settings", "휴대폰 설정 화면을 연다.",
                 JSONObject().put("page", JSONObject().put("type", "string").put("enum", JSONArray()
                     .put("main").put("wifi").put("bluetooth").put("display").put("sound").put("battery")
-                    .put("storage").put("apps").put("location").put("dnd").put("usage_access"))),
+                    .put("storage").put("apps").put("location").put("dnd").put("usage_access").put("tts").put("notification_access"))),
                 listOf("page")))
+            .put(tool("open_kuvis_settings", "쿠비스 자체 설정 화면을 연다 (API 키, 모델, 목소리·속도·음높이, 기억장, 숨긴 앱, 업데이트 등).",
+                JSONObject().put("section", JSONObject().put("type", "string")
+                    .put("enum", JSONArray().put("top").put("voice").put("claude").put("memory").put("abilities").put("update"))
+                    .put("description", "보여 줄 부분"))))
             .put(tool("open_map", "지도에서 장소를 찾거나 길찾기를 연다.",
                 JSONObject().put("query", p("string", "장소 이름이나 주소")), listOf("query")))
             .put(tool("open_url", "웹 주소를 브라우저로 연다.",
@@ -235,6 +239,7 @@ class PhoneTools(private val ctx: Context) {
         "open_map" -> launch(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + Uri.encode(a.getString("query")))), "지도를 열게요")
         "open_url" -> launch(Intent(Intent.ACTION_VIEW, Uri.parse(a.getString("url"))), "브라우저를 열게요")
         "device_status" -> status()
+        "open_kuvis_settings" -> launch(Intent(ctx, SettingsActivity::class.java).putExtra("section", a.optString("section", "top")), "쿠비스 설정")
         "todo_add" -> { val t = store.addTodo(a.getString("text"), a.optString("due", "")); Bus.changed(); "추가됨 id=${t.id}" + (t.due?.let { " 기한 $it" } ?: "") }
         "todo_list" -> todoList(a.optBoolean("include_done", false))
         "todo_done" -> { val ok = store.setDone(a.getLong("id"), a.optBoolean("done", true)); Bus.changed(); if (ok) "표시함" else "그 id 없음" }
@@ -636,6 +641,8 @@ class PhoneTools(private val ctx: Context) {
             "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
             "dnd" -> "android.settings.ZEN_MODE_SETTINGS"
             "usage_access" -> Settings.ACTION_USAGE_ACCESS_SETTINGS
+            "tts" -> "com.android.settings.TTS_SETTINGS"
+            "notification_access" -> Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS
             else -> Settings.ACTION_SETTINGS
         }
         return launch(Intent(action), "$page 설정 화면")
