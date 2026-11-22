@@ -1078,11 +1078,18 @@ class HomeActivity : Activity() {
         val frac = (1f - abs(ty) / drawerHeight()).coerceIn(0f, 1f)
         mainContent.alpha = 1f - frac
         if (Build.VERSION.SDK_INT >= 31 && blurSupported()) window.setBackgroundBlurRadius((frac * 70).toInt())
+        // 위 상태 표시줄·아래 내비게이션 줄도 서랍과 같은 색으로 (안 그러면 배경화면이 그대로 보임)
+        val base = drawerTint()
+        val bar = Color.argb((Color.alpha(base) * frac).toInt(), Color.red(base), Color.green(base), Color.blue(base))
+        window.statusBarColor = bar
+        window.navigationBarColor = bar
     }
+
+    private fun drawerTint(): Int = if (blurSupported()) Color.argb(70, 0, 0, 0) else Color.argb(215, 12, 14, 20)
 
     private fun buildDrawer(): FrameLayout {
         val d = FrameLayout(this).apply {
-            setBackgroundColor(if (blurSupported()) Color.argb(70, 0, 0, 0) else Color.argb(215, 12, 14, 20))
+            setBackgroundColor(drawerTint())
             isClickable = true
         }
         drawerColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
