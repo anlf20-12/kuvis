@@ -1018,6 +1018,25 @@ class HomeActivity : Activity() {
         }
     }
 
+    /** 고정줄 몇 번째에 넣을지 묻기 (others: 이 앱을 뺀 지금 고정줄) */
+    private fun askDockPosition(app: AppEntry, others: List<String>) {
+        fun name(p: String) = apps.firstOrNull { it.pkg == p }?.label ?: p
+        val choices = (0..others.size).map { i ->
+            "${i + 1}번째" + when {
+                others.isEmpty() -> ""
+                i == 0 -> "  (맨 왼쪽, ${name(others[0])} 앞)"
+                i == others.size -> "  (맨 오른쪽, ${name(others.last())} 뒤)"
+                else -> "  (${name(others[i - 1])}와 ${name(others[i])} 사이)"
+            }
+        }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("${app.label} → 고정줄 몇 번째에 둘까요?")
+            .setItems(choices.toTypedArray()) { _, i ->
+                store.setDock(others.toMutableList().apply { add(i, app.pkg) })
+                drawDock()
+            }.show()
+    }
+
     fun launch(pkg: String) {
         if (pkg == packageName) { SettingsActivity.open(this); return }
         val i = packageManager.getLaunchIntentForPackage(pkg) ?: return
@@ -1038,7 +1057,8 @@ class HomeActivity : Activity() {
     private fun appMenu(app: AppEntry) {
         val dock = store.dock() ?: emptyList()
         val items = mutableListOf("홈 화면에 추가")
-        items.add(if (app.pkg in dock) "고정줄에서 빼기" else "고정줄에 넣기")
+        if (app.pkg in dock) { items.add("고정줄에서 빼기"); if (dock.size > 1) items.add("고정줄 자리 옮기기") }
+        else items.add("고정줄에 넣기")
         items.add("폴더 옮기기"); items.add("숨기기"); items.add("앱 정보"); items.add("앱 삭제")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle(app.label)
@@ -1048,8 +1068,9 @@ class HomeActivity : Activity() {
                     "고정줄에서 빼기" -> { store.setDock(dock - app.pkg); drawDock() }
                     "고정줄에 넣기" -> {
                         if (dock.size >= 5) toast("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")
-                        else { store.setDock(dock + app.pkg); drawDock() }
+                        else askDockPosition(app, dock)
                     }
+                    "고정줄 자리 옮기기" -> askDockPosition(app, dock - app.pkg)
                     "폴더 옮기기" -> {
                         val order = store.folderOrder()
                         val choices = order + "폴더 밖 (맨 아래)"
