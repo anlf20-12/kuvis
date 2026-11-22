@@ -187,6 +187,7 @@ class HomeActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(pkgReceiver, f, Context.RECEIVER_EXPORTED)
         else registerReceiver(pkgReceiver, f)
 
+        fixClockOnce()
         loadApps()
         refreshAll()
         firstRun()
@@ -329,6 +330,19 @@ class HomeActivity : Activity() {
     fun showMenu() = SettingsActivity.open(this)
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    /** 한 번만: 시계 위젯을 예전 홈 화면처럼 한 줄 높이로 (가능하면 가로 가득) */
+    private fun fixClockOnce() {
+        if (store.rawGet("clockV2") != null) return
+        store.rawPut("clockV2", "1")
+        for (p in 0 until HomeGrid.PAGES) {
+            val list = HomeGrid.items(this, p)
+            val c = list.firstOrNull { it.kind == "clock" } ?: continue
+            val full = c.copy(x = 0, w = HomeGrid.COLS, h = 1)
+            val fixed = if (HomeGrid.isFree(list, full.x, full.y, full.w, full.h, c)) full else c.copy(h = 1)
+            HomeGrid.save(this, p, list.map { if (it == c) fixed else it })
+        }
+    }
 
     // =====================================================================
     // 홈 바둑판

@@ -2,6 +2,7 @@ package com.t.kuvis
 
 import android.app.AlertDialog
 import android.app.DatePickerDialog
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Paint
 import android.view.Gravity
@@ -62,24 +63,32 @@ class WeatherWidget(home: HomeActivity) : Page(home) {
 
 }
 
-/** 시계 위젯 */
-class ClockWidget(home: HomeActivity) : Page(home) {
+/** 시계 위젯: 칸 크기에 맞춰 글자가 줄어들고(스크롤 없음), 누르면 알람 앱 */
+class ClockWidget(home: HomeActivity) : LinearLayout(home) {
     init {
-        val clock = card().apply { gravity = Gravity.CENTER }
-        clock.addView(TextClock(home).apply {
+        orientation = VERTICAL
+        gravity = Gravity.CENTER
+        background = rounded(C.card, home.dpf(22f))
+        setPadding(home.dp(12), home.dp(6), home.dp(12), home.dp(6))
+        val time = TextClock(home).apply {
             format12Hour = "a h:mm"; format24Hour = "HH:mm"
-            textSize = 46f; setTextColor(C.text); gravity = Gravity.CENTER
+            setTextColor(C.text); gravity = Gravity.CENTER; maxLines = 1
             textLocale = Locale.KOREAN
-        })
-        clock.addView(TextClock(home).apply {
+            setAutoSizeTextTypeUniformWithConfiguration(14, 46, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        val date = TextClock(home).apply {
             format12Hour = "M월 d일 EEEE"; format24Hour = "M월 d일 EEEE"
-            textSize = 15f; setTextColor(C.dim); gravity = Gravity.CENTER
+            setTextColor(C.dim); gravity = Gravity.CENTER; maxLines = 1
             textLocale = Locale.KOREAN
-        })
-        body.addView(clock, LinearLayout.LayoutParams(MATCH, MATCH))
-        body.gravity = Gravity.CENTER
+            setAutoSizeTextTypeUniformWithConfiguration(9, 15, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        addView(time, LayoutParams(MATCH, 0, 3f))
+        addView(date, LayoutParams(MATCH, 0, 1.2f))
+        setOnClickListener {
+            home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
-    override fun refresh() {}
+    fun refresh() {}
 }
 
 /** 쿠비스 부르기 버튼 위젯 (작은 ⚙는 쿠비스 설정) */
