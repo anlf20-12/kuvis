@@ -1,0 +1,8 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+.idea/
+*.iml
+# 서명 키는 GitHub 비밀 값(KUVIS_KEYSTORE_B64)으로 보관
+app/kuvis.keystore
