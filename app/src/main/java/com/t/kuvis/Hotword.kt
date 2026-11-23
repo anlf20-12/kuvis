@@ -10,6 +10,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
@@ -22,11 +24,29 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 
 /**
- * 충전 중일 때만 "쿠비스" 소리를 기다렸다가 쿠비스를 부른다.
- * 충전기를 빼면 바로 멈춘다. 듣는 동안엔 알림창에 '듣는 중'이 보인다.
+ * 충전 중이거나 이어폰을 쓰는 중일 때 "쿠비스" 소리를 기다렸다가 쿠비스를 부른다.
+ * 충전기·이어폰을 빼면 바로 멈춘다. 듣는 동안엔 알림창에 '듣는 중'이 보인다.
  */
 object Hotword {
     fun enabled(ctx: Context) = Prefs(ctx).p.getBoolean("wakeOnCharge", true)
+    fun earEnabled(ctx: Context) = Prefs(ctx).p.getBoolean("wakeOnEarphone", true)
+
+    /** 유선·블루투스·USB 이어폰이 연결돼 있나 */
+    fun earphones(ctx: Context): Boolean {
+        return try {
+            val am = ctx.getSystemService(AudioManager::class.java)
+            val types = mutableSetOf(
+                AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                AudioDeviceInfo.TYPE_USB_HEADSET
+            )
+            if (Build.VERSION.SDK_INT >= 31) types.add(AudioDeviceInfo.TYPE_BLE_HEADSET)
+            am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in types }
+        } catch (_: Exception) { false }
+    }
+
+    /** 지금 듣기를 켜 둘 상황인가: 충전 중(스위치 켜짐) 또는 이어폰 연결(스위치 켜짐) */
+    fun shouldRun(ctx: Context) = (enabled(ctx) && charging(ctx)) || (earEnabled(ctx) && earphones(ctx))
 
     fun charging(ctx: Context): Boolean {
         val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return false
@@ -37,7 +57,7 @@ object Hotword {
 
     /** 지금 상태에 맞게 켜거나 끄기. 켜기는 화면에 쿠비스(홈)가 보일 때 불러야 마이크가 허락됨 */
     fun sync(ctx: Context) {
-        val want = enabled(ctx) && charging(ctx) &&
+        val want = shouldRun(ctx) &&
             ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
         if (want && !HotwordService.running) {
             try { ctx.startForegroundService(Intent(ctx, HotwordService::class.java)) }
@@ -49,18 +69,26 @@ object Hotword {
 
     private var receiver: BroadcastReceiver? = null
 
-    /** 앱이 살아 있는 동안 충전기 꽂고 빼기를 지켜봄 */
+    /** 앱이 살아 있는 동안 충전기·이어폰 꽂고 빼기를 지켜봄 */
     fun watch(app: Context) {
         if (receiver != null) return
         receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context, i: Intent) {
-                if (i.action == Intent.ACTION_POWER_DISCONNECTED) c.stopService(Intent(c, HotwordService::class.java))
-                else sync(c)
-            }
+            override fun onReceive(c: Context, i: Intent) { safeSync(c) }
         }
         val f = IntentFilter().apply { addAction(Intent.ACTION_POWER_CONNECTED); addAction(Intent.ACTION_POWER_DISCONNECTED) }
         if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, f, Context.RECEIVER_NOT_EXPORTED)
         else app.registerReceiver(receiver, f)
+        try {
+            app.getSystemService(AudioManager::class.java).registerAudioDeviceCallback(object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) { safeSync(app) }
+                override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) { safeSync(app) }
+            }, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {}
+    }
+
+    private fun safeSync(c: Context) {
+        if (!shouldRun(c)) { if (HotwordService.running) c.stopService(Intent(c, HotwordService::class.java)) }
+        else sync(c)
     }
 
     /** 들은 말에 '쿠비스'가 들어 있나 (발음이 비슷한 것까지) */
@@ -104,7 +132,7 @@ class HotwordService : Service() {
         val n = Notification.Builder(this, "hotword")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("쿠비스가 듣는 중")
-            .setContentText("충전 중이라 \"쿠비스\"라고 부르면 대답해요. 충전기를 빼면 꺼져요.")
+            .setContentText("\"쿠비스\"라고 부르면 대답해요. 충전기·이어폰을 빼면 꺼져요.")
             .setContentIntent(open)
             .setOngoing(true)
             .build()
@@ -117,7 +145,7 @@ class HotwordService : Service() {
 
     private fun listen() {
         if (!running || paused || listening) return
-        if (!Hotword.charging(this) || !Hotword.enabled(this)) { stopSelf(); return }
+        if (!Hotword.shouldRun(this)) { stopSelf(); return }
         try {
             if (rec == null) {
                 rec = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }

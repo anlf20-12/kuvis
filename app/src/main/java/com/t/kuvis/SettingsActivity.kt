@@ -407,9 +407,13 @@ class SettingsActivity : Activity() {
     private fun buildVoice(c: LinearLayout) {
         c.addView(switchRow("충전 중에 \"쿠비스\"라고 부르면 대답하기", prefs.p.getBoolean("wakeOnCharge", true)) { v ->
             prefs.p.edit().putBoolean("wakeOnCharge", v).apply()
-            if (!v) stopService(Intent(this, HotwordService::class.java))
+            Hotword.sync(this)
         })
-        c.addView(txt("충전기를 꽂아 두었을 때만 들어요. 빼면 바로 꺼져요. 쿠비스를 '디지털 어시스턴트 앱'으로 정해 두면 화면이 꺼져 있어도 잘 떠요.", 12f, C.dim).apply { setPadding(0, 0, 0, dp(10)) })
+        c.addView(switchRow("이어폰을 쓰는 중에 \"쿠비스\"라고 부르면 대답하기", prefs.p.getBoolean("wakeOnEarphone", true)) { v ->
+            prefs.p.edit().putBoolean("wakeOnEarphone", v).apply()
+            Hotword.sync(this)
+        })
+        c.addView(txt("충전기나 이어폰(유선·블루투스)이 연결돼 있을 때만 들어요. 빼면 바로 꺼져요. 쿠비스를 '디지털 어시스턴트 앱'으로 정해 두면 화면이 꺼져 있어도 잘 떠요.", 12f, C.dim).apply { setPadding(0, 0, 0, dp(10)) })
         c.addView(label("음성 엔진 (휴대폰에 설치된 무료 엔진)"))
         val engineSpinner = Spinner(this)
         c.addView(engineSpinner)
@@ -421,7 +425,6 @@ class SettingsActivity : Activity() {
         seek("말하기 속도", 0.6f, 2.0f, prefs.rate) { prefs.p.edit().putFloat("rate", it).apply() }.forEach { c.addView(it) }
         seek("음높이", 0.5f, 2.0f, prefs.pitch) { prefs.p.edit().putFloat("pitch", it).apply() }.forEach { c.addView(it) }
 
-        c.addView(switchRow("연속 대화 (답한 뒤 자동으로 다시 듣기)", prefs.loop) { prefs.loop = it })
 
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(12), 0, 0) }
         row.addView(button("미리 듣기", primary = true) { preview() })
@@ -555,7 +558,7 @@ class SettingsActivity : Activity() {
         val store = Store(this)
         val mem = store.memory()
         if (mem.isEmpty()) {
-            memoryBox.addView(txt("아직 없어요. 쿠비스에게 \"기억해 줘, ○○\"라고 말하면 여기 쌓여요.", 13f, C.dim)); return
+            memoryBox.addView(txt("아직 없어요.", 13f, C.dim)); return
         }
         for (m in mem) {
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(6), 0, 0) }

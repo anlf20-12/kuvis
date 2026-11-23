@@ -132,11 +132,6 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         list.addView(home.txt(selected.format(f), 16f, C.text, bold = true))
         val dayEvents = events.filter { !selected.isBefore(it.startDate) && !selected.isAfter(it.endDate) }
             .sortedWith(compareBy<Ev> { !it.allDay }.thenBy { it.begin })
-        if (dayEvents.isEmpty()) {
-            list.addView(home.txt("일정이 없어요. 쿠비스에게 말하거나 + 를 눌러 추가하세요.", 14f, C.dim).apply {
-                setPadding(0, home.dp(8), 0, 0)
-            })
-        }
         val tf = DateTimeFormatter.ofPattern("a h:mm", Locale.KOREAN)
         for (e in dayEvents) {
             val time = if (e.allDay) "종일" else
@@ -197,6 +192,8 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                     text = sg.e.title; textSize = 9.5f; setTextColor(Color.WHITE)
                     maxLines = 1; ellipsize = TextUtils.TruncateAt.END
                     setPadding(home.dp(3), 0, home.dp(2), 0)
+                    // 여러 날 이어지는 일정은 이름을 막대 가운데에
+                    if (sg.to > sg.from) gravity = Gravity.CENTER
                     background = android.graphics.drawable.GradientDrawable().apply {
                         setColor(sg.e.color)
                         cornerRadii = floatArrayOf(if (contL) 0f else r, if (contL) 0f else r, if (contR) 0f else r, if (contR) 0f else r,
@@ -297,12 +294,6 @@ class MemoPage(home: HomeActivity) : Page(home) {
         body.addView(head, lp(4))
 
         val memos = store.memos()
-        if (memos.isEmpty()) {
-            body.addView(card().apply {
-                addView(home.txt("저장해 둔 메모가 없어요.\n\"메모해 줘, ○○\"처럼 말하면 여기에 저장돼요.", 14f, C.dim))
-            }, lp())
-        }
-        val df = DateTimeFormatter.ofPattern("M월 d일", Locale.KOREAN)
         for (m in memos) {
             val c = card().apply { setOnClickListener { edit(m) } }
             val lines = m.text.trim().lines()
@@ -312,9 +303,6 @@ class MemoPage(home: HomeActivity) : Page(home) {
             val rest = lines.drop(1).joinToString("\n").trim()
             if (rest.isNotEmpty()) c.addView(home.txt(rest, 14f, C.text).apply {
                 maxLines = 8; ellipsize = TextUtils.TruncateAt.END; setPadding(0, home.dp(4), 0, 0)
-            })
-            c.addView(home.txt(Instant.ofEpochMilli(m.updated).atZone(ZoneId.systemDefault()).format(df), 11f, C.dim).apply {
-                setPadding(0, home.dp(6), 0, 0)
             })
             body.addView(c, lp(10))
         }

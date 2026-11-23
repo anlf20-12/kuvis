@@ -27,6 +27,7 @@ class WeatherWidget(home: HomeActivity) : Page(home) {
 
     init {
         body.addView(weatherBox, LinearLayout.LayoutParams(MATCH, WRAP))
+        weatherBox.setOnClickListener { WeatherApp.open(home) }
     }
 
     override fun refresh() { setWeather(Weather.cached(home)) }
@@ -104,9 +105,7 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
 
     init {
         background = rounded(cardColor, home.dpf(22f))
-        setOnClickListener {
-            if (fixedStyle < 0) home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        }
+        setOnClickListener { if (fixedStyle < 0) ClockMenu.show(home) }
         refresh()
     }
 
@@ -346,11 +345,6 @@ class TodoWidget(home: HomeActivity) : Page(home) {
             "언제든" to open.filter { it.due == null },
             "오늘 끝낸 일" to all.filter { it.done && Instant.ofEpochMilli(it.doneAt).atZone(ZoneId.systemDefault()).toLocalDate().toString() == today }
         )
-        if (open.isEmpty() && sections.last().second.isEmpty()) {
-            todoBox.addView(home.txt("할 일이 없어요. \"내일까지 ○○ 할 일 넣어 줘\"처럼 말해 보세요.", 14f, C.dim).apply {
-                setPadding(0, home.dp(8), 0, 0)
-            })
-        }
         val df = DateTimeFormatter.ofPattern("M/d(E)", Locale.KOREAN)
         for ((title, list) in sections) {
             if (list.isEmpty()) continue
@@ -414,3 +408,71 @@ class TodoWidget(home: HomeActivity) : Page(home) {
     }
 }
 
+
+
+/** 시계를 누르면: 알람 · 타이머 · 스톱워치 고르기 */
+object ClockMenu {
+    private const val SAMSUNG = "com.sec.android.app.clockpackage"
+
+    fun show(home: HomeActivity) {
+        val items = arrayOf("⏰  알람", "⏳  타이머", "⏱  스톱워치")
+        android.app.AlertDialog.Builder(home, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setItems(items) { _, w ->
+                when (w) {
+                    0 -> home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    1 -> home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_TIMERS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    else -> stopwatch(home)
+                }
+            }
+            .show()
+    }
+
+    /** 스톱워치를 여는 표준 방법이 없어 시계 앱별로 시도하고, 안 되면 시계 앱을 연다 */
+    private fun stopwatch(home: HomeActivity) {
+        val tries = listOf(
+            // 삼성 시계: 스톱워치 탭
+            Intent().setClassName(SAMSUNG, "$SAMSUNG.ClockPackage").putExtra("clockpackage.select.tab", 3),
+            // 구글 시계
+            Intent("com.android.deskclock.action.STOPWATCH"),
+            Intent("android.intent.action.SHOW_STOPWATCH")
+        )
+        for (i in tries) {
+            try { home.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return } catch (_: Exception) {}
+        }
+        // 알람을 보여 주는 시계 앱을 찾아 그 앱을 연다 (스톱워치 탭은 직접 누르기)
+        val pkg = home.packageManager.resolveActivity(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS), 0)?.activityInfo?.packageName
+        val launch = pkg?.let { home.packageManager.getLaunchIntentForPackage(it) }
+        if (launch != null) home.safeStart(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        else home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+/** 날씨를 누르면 휴대폰의 날씨 앱 열기 */
+object WeatherApp {
+    private val known = listOf(
+        "com.sec.android.daemonapp",          // 삼성 날씨
+        "com.samsung.android.weather",
+        "com.google.android.apps.weather",
+        "com.kma.weather",                     // 기상청 날씨알리미
+        "com.accuweather.android"
+    )
+
+    fun open(home: HomeActivity) {
+        val pm = home.packageManager
+        for (p in known) {
+            val i = pm.getLaunchIntentForPackage(p) ?: continue
+            home.safeStart(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); return
+        }
+        // 이름에 '날씨'나 'weather'가 들어간 앱
+        val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val found = pm.queryIntentActivities(main, 0).firstOrNull {
+            val label = it.loadLabel(pm).toString()
+            label.contains("날씨") || label.contains("weather", ignoreCase = true)
+        }
+        if (found != null) {
+            home.safeStart(Intent(main).setClassName(found.activityInfo.packageName, found.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        }
+        home.safeStart(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://search.naver.com/search.naver?query=날씨")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}

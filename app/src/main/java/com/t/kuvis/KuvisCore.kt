@@ -50,6 +50,10 @@ class Prefs(ctx: Context) {
     val engine get() = p.getString("engine", "") ?: ""
     val voice get() = p.getString("voice", "") ?: ""
     val pitch get() = p.getFloat("pitch", 1.0f)
+    /** 대화 창의 스피커 버튼: 소리로 읽기 켜기/끄기 */
+    var speak: Boolean
+        get() = p.getBoolean("speak", true)
+        set(v) { p.edit().putBoolean("speak", v).apply() }
 }
 
 /**
@@ -81,7 +85,6 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     private var gen = 0
     private var conn: HttpURLConnection? = null
-    private var turnBubble: TextView? = null
     private var turnText = StringBuilder()
     private var turnActive = false
     private var needSpace = false
@@ -97,16 +100,27 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     }
     private var splitter = Splitter { }
     var askingPermission = false; private set
+    /** 대화 창이 가려졌을 때(다른 앱·알림창) 다시 듣기를 멈춤 */
+    var halted = false; private set
+    private var listenRetries = 0
 
     init {
         loadHistory()
-        renderHistory()
-        panel.orb.setOnClickListener { tap() }
+        panel.greet()
+        panel.micBtn.setOnClickListener { tap() }
         panel.onSend = { t -> interrupt(); handleUser(t) }
-        panel.newBtn.setOnClickListener { newChat() }
         panel.setBtn.setOnClickListener { interrupt(); setState("idle"); SettingsActivity.open(act) }
-        panel.setLoop(prefs.loop)
-        panel.loopBtn.setOnClickListener { prefs.loop = !prefs.loop; panel.setLoop(prefs.loop) }
+        panel.setSpeaker(prefs.speak)
+        panel.speakerBtn.setOnClickListener {
+            prefs.speak = !prefs.speak
+            panel.setSpeaker(prefs.speak)
+            if (!prefs.speak && state == "speaking") {
+                stopSpeaking()
+                if (streamDone) finishTurn()
+            }
+        }
+        panel.setModel(modelName(prefs.model))
+        panel.modelBtn.setOnClickListener { chooseModel() }
 
         val onInit = TextToSpeech.OnInitListener { st ->
             if (st == TextToSpeech.SUCCESS) {
@@ -121,17 +135,41 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                     override fun onError(id: String?) { main.post { utterFinished() } }
                 })
             } else {
-                main.post { panel.addMsg("error", "음성 출력(TTS)을 쓸 수 없어요. 쿠비스 설정 > 목소리에서 다른 엔진을 골라 주세요.") }
+                main.post { panel.showError("음성 출력(TTS)을 쓸 수 없어요. 쿠비스 설정 > 목소리에서 다른 엔진을 골라 주세요.") }
             }
             if (startWhenReady) { startWhenReady = false; main.post { start() } }
         }
         tts = if (prefs.engine.isBlank()) TextToSpeech(act, onInit) else TextToSpeech(act, onInit, prefs.engine)
     }
 
+    private val modelIds = listOf("auto", "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5")
+    private fun modelName(id: String) = when (id) {
+        "claude-haiku-5-5" -> "Haiku"; "claude-sonnet-5-5" -> "Sonnet"; "claude-opus-5-5" -> "Opus"; else -> "자동"
+    }
+
+    private fun chooseModel() {
+        val names = arrayOf("자동 — 간단한 건 Haiku, 나머지는 Sonnet", "Haiku — 가장 빠르고 저렴", "Sonnet — 균형", "Opus — 가장 똑똑, 비쌈")
+        AlertDialog.Builder(act, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setSingleChoiceItems(names, modelIds.indexOf(prefs.model).coerceAtLeast(0)) { d, w ->
+                prefs.p.edit().putString("model", modelIds[w]).apply()
+                panel.setModel(modelName(modelIds[w]))
+                d.dismiss()
+            }
+            .show()
+    }
+
+    /** 대화 창이 가려짐: 하던 것 멈추고 기다림 */
+    fun halt() { halted = true; interrupt(); setState("idle") }
+
+    /** 다시 보임: 바로 듣기 */
+    fun unhalt() { if (!halted) return; halted = false; if (!askingPermission) start() }
+
     // =====================================================================
     // 바깥에서 부르는 것
     fun start() {
         if (prefs.key.isBlank()) { SettingsActivity.open(act); return }
+        halted = false
+        listenRetries = 0
         startListening()
     }
 
@@ -196,13 +234,13 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         recognizer?.destroy()
         val r = makeRecognizer()
         if (r == null) {
-            panel.addMsg("error", "음성 인식 엔진이 없어요. Play 스토어에서 'Google' 앱을 설치·업데이트해 주세요.")
+            panel.showError("음성 인식 엔진이 없어요. Play 스토어에서 'Google' 앱을 설치·업데이트해 주세요.")
             goIdle()
             return
         }
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onReadyForSpeech(params: Bundle?) { listenRetries = 0 }
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) { if (state == "listening") panel.setLevel(rmsdB) }
             override fun onBufferReceived(buffer: ByteArray?) {}
@@ -215,19 +253,20 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             override fun onResults(b: Bundle?) {
                 if (state != "listening") return
                 val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().trim()
-                panel.setInterim("")
-                if (t.isNotEmpty()) handleUser(t) else goIdle("못 들었어요. 다시 누르고 말씀하세요")
+                if (t.isNotEmpty()) handleUser(t) else relisten(250)
             }
             override fun onError(error: Int) {
                 if (state != "listening") return
-                panel.setInterim("")
                 when (error) {
-                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                        goIdle("못 들었어요. 다시 누르고 말씀하세요")
+                    // 말이 없으면 꺼지지 않고 계속 기다림
+                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> relisten(250)
+                    SpeechRecognizer.ERROR_CLIENT, SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                        if (++listenRetries <= 4) relisten(900L * listenRetries)
+                        else goIdle("마이크가 잠깐 멈췄어요. 마이크를 눌러 주세요")
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> goIdle("마이크 권한을 허용해 주세요")
                     SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
                         goIdle("인터넷 연결을 확인해 주세요")
-                    else -> { ErrorLog.add(act, "음성 인식 오류", "code=$error"); goIdle("음성 인식이 멈췄어요 ($error). 다시 눌러 주세요") }
+                    else -> { ErrorLog.add(act, "음성 인식 오류", "code=$error"); goIdle("음성 인식이 멈췄어요 ($error). 마이크를 눌러 주세요") }
                 }
             }
         })
@@ -239,9 +278,32 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.packageName)
         }
-        panel.setInterim("")
         setState("listening")
         r.startListening(intent)
+    }
+
+    /** 조용히 다시 듣기 (다시 시작할 때 나는 '띵' 소리는 잠깐 줄임) */
+    private fun relisten(delay: Long) {
+        main.postDelayed({
+            if (halted || state != "listening" || askingPermission) return@postDelayed
+            muteBeep(true)
+            startListening()
+            main.postDelayed({ muteBeep(false) }, 700)
+        }, delay)
+    }
+
+    private var savedVol = -1
+    private fun muteBeep(on: Boolean) {
+        try {
+            val am = act.getSystemService(android.media.AudioManager::class.java)
+            if (on) {
+                if (am.isMusicActive || savedVol >= 0) return
+                savedVol = am.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, 0, 0)
+            } else if (savedVol >= 0) {
+                am.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, savedVol, 0); savedVol = -1
+            }
+        } catch (_: Exception) {}
     }
 
     private fun stopListening() {
@@ -260,7 +322,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     private fun enqueueSpeech(sentence: String) {
         val s = cleanForSpeech(sentence)
-        if (s.isEmpty() || !ttsReady) return
+        if (s.isEmpty() || !ttsReady || !prefs.speak) return
+        muteBeep(false)
         if (state != "speaking") setState("speaking")
         pendingUtter++
         tts?.setSpeechRate(prefs.rate)
@@ -279,7 +342,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     }
 
     private fun speakQuick(t: String) {
-        if (!ttsReady) return
+        if (!ttsReady || !prefs.speak) return
+        muteBeep(false)
         stopSpeaking()
         tts?.setSpeechRate(prefs.rate)
         tts?.setPitch(prefs.pitch)
@@ -301,11 +365,12 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             var leaves = false
             for ((i, l) in launches) {
                 try { act.startActivity(i); if (l) leaves = true }
-                catch (e: Exception) { panel.addMsg("error", "실행하지 못했어요: ${e.message}") }
+                catch (e: Exception) { panel.showError("실행하지 못했어요: ${e.message}") }
             }
             if (leaves) { goIdle(ended = true); return }
         }
-        if (prefs.loop) startListening() else goIdle()
+        // 대화 창이 열려 있는 동안은 계속 들음 (X를 눌러야 끝남)
+        if (halted) goIdle() else startListening()
     }
 
     // =====================================================================
@@ -313,20 +378,20 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     private fun handleUser(text: String) {
         val t = text.trim()
         if (Regex("^(그만|됐어|대화 ?끝|끝내자|고마워|잘 ?자)[.!]?$").matches(t)) {
-            panel.addMsg("user", t)
+            panel.showUser(t)
             goIdle("대화를 멈췄어요", ended = true)
             return
         }
         if (Regex("^새 ?대화[.!]?$").matches(t)) { newChat(); speakQuick("새 대화를 시작할게요."); return }
         if (prefs.key.isBlank()) { SettingsActivity.open(act); return }
         history.add("user" to t)
-        panel.addMsg("user", t)
+        panel.showUser(t)
         askClaude()
     }
 
     fun newChat() {
         interrupt()
-        history.clear(); saveHistory(); renderHistory(); setState("idle")
+        history.clear(); saveHistory(); panel.greet(); setState("idle")
     }
 
     fun interrupt() {
@@ -339,7 +404,6 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             if (partial.isNotBlank()) {
                 history.add("assistant" to "$partial …(중단됨)")
             } else {
-                turnBubble?.let { panel.removeMsg(it) }
                 if (history.isNotEmpty() && history.last().first == "user") history.removeAt(history.size - 1)
             }
             saveHistory()
@@ -513,8 +577,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         }
         needSpace = false
         turnText.append(t)
-        turnBubble?.text = turnText.toString().replace("**", "")
-        panel.scrollDown()
+        panel.showReply(turnText.toString().replace("**", ""))
         splitter.push(t)
     }
 
@@ -527,7 +590,6 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         turnModel = pickModel(history.lastOrNull { it.first == "user" }?.second ?: "")
         val msgs = startMessages()
 
-        turnBubble = panel.addMsg("assistant", "…")
         turnText = StringBuilder()
         turnActive = true
         needSpace = false
@@ -574,7 +636,6 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         conn = null
         turnActive = false
         if (err != null && turnText.isBlank()) {
-            turnBubble?.let { panel.removeMsg(it) }
             if (history.isNotEmpty() && history.last().first == "user") history.removeAt(history.size - 1)
             val msg = when {
                 err.contains("401") -> "API 키가 맞지 않아요. 설정에서 확인해 주세요."
@@ -584,16 +645,16 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 err.contains("Unable to resolve host") || err.contains("timeout", true) -> "인터넷 연결을 확인해 주세요."
                 else -> "오류: $err"
             }
-            panel.addMsg("error", msg)
+            panel.showError(msg)
             ErrorLog.add(act, "Claude 호출 실패 ($turnModel)", err)
             speakQuick(msg.substringBefore("."))
             goIdle()
             return
         }
-        if (err != null) panel.addMsg("error", "중간에 오류가 났어요: $err")
+        if (err != null) ErrorLog.add(act, "Claude 답 중간 오류 ($turnModel)", err)
         splitter.flush()
         var full = turnText.toString()
-        if (full.isBlank()) { full = "됐어요."; turnBubble?.text = full; enqueueSpeech(full) }
+        if (full.isBlank()) { full = "됐어요."; panel.showReply(full); enqueueSpeech(full) }
         history.add("assistant" to full)
         saveHistory()
         history.lastOrNull { it.first == "user" }?.second?.let { u -> try { Journal.add(act, u, full) } catch (_: Exception) {} }
@@ -605,11 +666,13 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     private fun saveHistory() {
         val arr = JSONArray()
         for ((r, c) in history.takeLast(60)) arr.put(JSONObject().put("role", r).put("content", c))
-        prefs.p.edit().putString("history", arr.toString()).apply()
+        prefs.p.edit().putString("history", arr.toString()).putLong("historyAt", System.currentTimeMillis()).apply()
     }
 
+    /** 화면은 매번 새로 시작하지만, 앞 대화 흐름은 이어서 기억함 (6시간 넘게 쉬었으면 새 흐름) */
     private fun loadHistory() {
         history.clear()
+        if (System.currentTimeMillis() - prefs.p.getLong("historyAt", 0L) > 6 * 3600_000L) return
         try {
             val arr = JSONArray(prefs.p.getString("history", "[]"))
             for (i in 0 until arr.length()) {
@@ -617,14 +680,6 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 history.add(o.getString("role") to o.getString("content"))
             }
         } catch (_: Exception) {}
-    }
-
-    private fun renderHistory() {
-        panel.clear()
-        // 측면 버튼 창은 최근 몇 개만 보여 줌
-        val recent = history.takeLast(6)
-        if (recent.isEmpty()) panel.addMsg("system", "무엇을 도와드릴까요, T?")
-        for ((r, c) in recent) panel.addMsg(r, c.replace("**", ""))
     }
 }
 

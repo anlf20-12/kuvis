@@ -32,6 +32,7 @@
         </intent>
         <intent><action android:name="android.media.action.STILL_IMAGE_CAMERA" /></intent>
         <intent><action android:name="android.intent.action.DIAL" /></intent>
+        <intent><action android:name="android.intent.action.SHOW_ALARMS" /></intent>
         <intent><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent>
         <package android:name="com.t.kuvis.notify" />
         <package android:name="com.anthropic.claude" />

@@ -1,169 +1,350 @@
 package com.t.kuvis
 
 import android.animation.ValueAnimator
+import android.app.AlertDialog
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.InputType
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
-import android.widget.Button
+import android.view.animation.LinearInterpolator
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
+import kotlin.math.cos
+import kotlin.math.min
+import kotlin.math.sin
 
-/** 쿠비스 대화 창: 대화 기록 + 동그라미 + 상태 + 글 입력 */
+/**
+ * 쿠비스 대화 창 — Claude 앱 음성 대화 화면과 같은 모양.
+ * 아래에서 올라오는 어두운 시트, 가운데 별꽃 마크와 지금 하는 말, 큰 마이크 버튼,
+ * 아래 왼쪽 모델 고르기, 오른쪽 소리 켜기/끄기와 끝내기(X).
+ * 대화 글이 쌓이는 목록은 없고, 지금 듣거나 말하는 것만 보인다.
+ */
 class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
 
-    val scroll = ScrollView(ctx)
-    private val log = LinearLayout(ctx)
-    private val interim = ctx.txt("", 15f, Color.parseColor("#A7F3D0"), gravity = Gravity.CENTER)
-    private val orbBg = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        gradientType = GradientDrawable.RADIAL_GRADIENT
-        gradientRadius = ctx.dpf(55f)
-        setGradientCenter(0.35f, 0.3f)
+    companion object {
+        val ORANGE = Color.parseColor("#D97757")
+        val ORANGE_DIM = Color.parseColor("#6E3F33")
+        private val GREY = Color.parseColor("#9A9DA3")
+        private val BTN = Color.parseColor("#26272B")
+        private val BTN_LINE = Color.parseColor("#33353A")
+        private const val GREETING = "T, 이야기해요"
+        private const val MATCH = -1  // MATCH_PARENT
+        private const val WRAP = -2   // WRAP_CONTENT
     }
-    val orb = View(ctx)
-    private val status = ctx.txt("", 13f, C.dim, gravity = Gravity.CENTER)
-    val input = EditText(ctx)
-    val newBtn = smallBtn("새 대화")
-    val setBtn = smallBtn("설정")
-    val loopBtn = smallBtn("")
+
+    val handle = View(ctx)
+    val expandBtn = IconView(ctx, IconView.EXPAND)
+    val setBtn = IconView(ctx, IconView.GEAR)
+    val spark = SparkView(ctx)
+    private val caption = TextView(ctx)
+    val micBtn = IconView(ctx, IconView.MIC)
+    val modelBtn = LinearLayout(ctx)
+    private val modelLabel = TextView(ctx)
+    val speakerBtn = IconView(ctx, IconView.SPEAKER)
+    val closeBtn = IconView(ctx, IconView.CLOSE)
+
     private var pulse: ValueAnimator? = null
+    private var spin: ValueAnimator? = null
+    private var state = "idle"
+    private var replyShown = false
 
     var onSend: ((String) -> Unit)? = null
 
     init {
         orientation = VERTICAL
-        background = rounded(Color.argb(240, 5, 8, 15), ctx.dpf(24f), ctx.dp(1), C.line)
-        setPadding(ctx.dp(14), ctx.dp(12), ctx.dp(14), ctx.dp(12))
         isClickable = true // 바깥 닫기와 구분
+        val r = ctx.dpf(28f)
+        background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(
+            Color.parseColor("#151515"), Color.parseColor("#151515"),
+            Color.parseColor("#1B1F27"), Color.parseColor("#3C4A5E"), Color.parseColor("#55657C")
+        )).apply { cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) }
 
-        val head = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        head.addView(ctx.txt("쿠비스", 16f, C.text, bold = true), LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        head.addView(loopBtn); head.addView(newBtn); head.addView(setBtn)
-        addView(head)
+        // 맨 위: 손잡이 + 크게 보기
+        val top = FrameLayout(ctx)
+        handle.background = rounded(Color.parseColor("#5C5D61"), ctx.dpf(3f))
+        top.addView(handle, FrameLayout.LayoutParams(ctx.dp(44), ctx.dp(5), Gravity.CENTER_HORIZONTAL or Gravity.TOP)
+            .apply { topMargin = ctx.dp(14) })
+        expandBtn.contentDescription = "크게 보기"
+        top.addView(expandBtn, FrameLayout.LayoutParams(ctx.dp(40), ctx.dp(40), Gravity.END or Gravity.TOP)
+            .apply { topMargin = ctx.dp(10); rightMargin = ctx.dp(14) })
+        addView(top, LayoutParams(MATCH, ctx.dp(60)))
 
-        log.orientation = VERTICAL
-        scroll.addView(log)
-        scroll.isVerticalScrollBarEnabled = false
-        addView(scroll, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ctx.dp(230)))
+        // 설정(톱니바퀴) — 오른쪽
+        val gearRow = FrameLayout(ctx)
+        setBtn.contentDescription = "쿠비스 설정"
+        setBtn.background = circle(BTN, BTN_LINE)
+        setBtn.pad = 0.30f
+        gearRow.addView(setBtn, FrameLayout.LayoutParams(ctx.dp(60), ctx.dp(60), Gravity.END).apply { rightMargin = ctx.dp(16) })
+        addView(gearRow, LayoutParams(MATCH, WRAP))
 
-        interim.setPadding(0, ctx.dp(4), 0, ctx.dp(6))
-        addView(interim)
+        addView(View(ctx), LayoutParams(MATCH, 0, 1f))
 
-        orb.background = orbBg
-        orb.contentDescription = "말하기"
-        addView(orb, LayoutParams(ctx.dp(92), ctx.dp(92)).apply { gravity = Gravity.CENTER_HORIZONTAL })
-        status.setPadding(0, ctx.dp(8), 0, ctx.dp(8))
-        addView(status)
-
-        val row = LinearLayout(ctx).apply { orientation = HORIZONTAL }
-        input.apply {
-            hint = "글로 입력해도 돼요"; setHintTextColor(C.dim); setTextColor(C.text); textSize = 15f
-            background = rounded(C.panel, ctx.dpf(12f), ctx.dp(1), C.line)
-            setPadding(ctx.dp(12), ctx.dp(9), ctx.dp(12), ctx.dp(9))
-            imeOptions = EditorInfo.IME_ACTION_SEND
-            inputType = InputType.TYPE_CLASS_TEXT
-            setOnEditorActionListener { _, id, _ -> if (id == EditorInfo.IME_ACTION_SEND) { send(); true } else false }
+        // 가운데: 별꽃 마크 + 지금 하는 말
+        addView(spark, LayoutParams(ctx.dp(66), ctx.dp(66)).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        caption.apply {
+            gravity = Gravity.CENTER
+            setTextColor(GREY)
+            setLineSpacing(0f, 1.15f)
+            setPadding(ctx.dp(28), ctx.dp(12), ctx.dp(28), ctx.dp(4))
+            maxLines = 6
+            ellipsize = TextUtils.TruncateAt.START
         }
-        row.addView(input, LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val sendBtn = Button(ctx).apply {
-            text = "보내기"; setTextColor(Color.parseColor("#04121F")); isAllCaps = false
-            background = rounded(C.accent, ctx.dpf(12f))
-            setOnClickListener { send() }
+        addView(caption, LayoutParams(MATCH, WRAP))
+
+        // 마이크 (누르면 듣기/멈추기, 길게 누르면 글로 입력)
+        micBtn.contentDescription = "말하기"
+        micBtn.background = circle(Color.parseColor("#2A2B30"), BTN_LINE)
+        micBtn.pad = 0.30f
+        micBtn.elevation = ctx.dpf(6f)
+        micBtn.setOnLongClickListener { typeDialog(); true }
+        addView(micBtn, LayoutParams(ctx.dp(86), ctx.dp(86)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL; topMargin = ctx.dp(14)
+        })
+
+        // 맨 아래 줄
+        val bottom = FrameLayout(ctx)
+        modelBtn.apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = rounded(BTN, ctx.dpf(30f), ctx.dp(1), BTN_LINE)
+            setPadding(ctx.dp(22), 0, ctx.dp(16), 0)
+            contentDescription = "모델 고르기"
         }
-        row.addView(sendBtn, LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            .apply { leftMargin = ctx.dp(8) })
-        addView(row)
+        modelLabel.apply { textSize = 17f; setTextColor(Color.parseColor("#E8E8EA")) }
+        modelBtn.addView(modelLabel)
+        modelBtn.addView(IconView(ctx, IconView.CHEVRONS).apply { pad = 0.18f },
+            LayoutParams(ctx.dp(26), ctx.dp(26)).apply { leftMargin = ctx.dp(8) })
+        bottom.addView(modelBtn, FrameLayout.LayoutParams(WRAP, ctx.dp(58), Gravity.START or Gravity.CENTER_VERTICAL)
+            .apply { leftMargin = ctx.dp(18) })
+
+        val right = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        speakerBtn.background = circle(BTN, BTN_LINE)
+        speakerBtn.pad = 0.29f
+        speakerBtn.contentDescription = "소리 켜기/끄기"
+        right.addView(speakerBtn, LayoutParams(ctx.dp(58), ctx.dp(58)))
+        closeBtn.background = circle(Color.WHITE, Color.WHITE)
+        closeBtn.color = Color.parseColor("#111111")
+        closeBtn.pad = 0.32f
+        closeBtn.contentDescription = "끝내기"
+        right.addView(closeBtn, LayoutParams(ctx.dp(58), ctx.dp(58)).apply { leftMargin = ctx.dp(12) })
+        bottom.addView(right, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL)
+            .apply { rightMargin = ctx.dp(18) })
+        addView(bottom, LayoutParams(MATCH, ctx.dp(70)).apply { topMargin = ctx.dp(22); bottomMargin = ctx.dp(14) })
+
+        greet()
         setState("idle", null)
     }
 
-    private fun send() {
-        val t = input.text.toString().trim()
-        if (t.isEmpty()) return
-        input.setText("")
-        onSend?.invoke(t)
+    private fun circle(fill: Int, line: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.OVAL; setColor(fill); setStroke(context.dp(1), line)
     }
 
-    private fun smallBtn(label: String) = Button(context).apply {
-        text = label; setTextColor(C.text); textSize = 13f; isAllCaps = false
-        background = rounded(C.panel, context.dpf(10f), context.dp(1), C.line)
-        minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0
-        setPadding(context.dp(10), context.dp(6), context.dp(10), context.dp(6))
-        layoutParams = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            .apply { leftMargin = context.dp(6) }
+    private fun typeDialog() {
+        val et = EditText(context).apply {
+            hint = "쿠비스에게 글로 말하기"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        }
+        val wrap = FrameLayout(context).apply { setPadding(context.dp(20), context.dp(8), context.dp(20), 0); addView(et) }
+        AlertDialog.Builder(context, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setView(wrap)
+            .setPositiveButton("보내기") { _, _ -> et.text.toString().trim().takeIf { it.isNotEmpty() }?.let { onSend?.invoke(it) } }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
-    fun setLoop(on: Boolean) {
-        loopBtn.text = if (on) "연속 켜짐" else "연속 꺼짐"
-        loopBtn.setTextColor(if (on) C.green else C.text)
+    // ---------------------------------------------------------------
+    private fun captionStyle(kind: String) {
+        when (kind) {
+            "greet" -> { caption.textSize = 27f; caption.typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL); caption.setTextColor(GREY) }
+            "interim" -> { caption.textSize = 21f; caption.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC); caption.setTextColor(GREY) }
+            "reply" -> { caption.textSize = 18f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#D4D6DA")) }
+            "status" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(GREY) }
+            "error" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#F2A39A")) }
+        }
     }
+
+    /** 처음 열렸을 때: "T, 이야기해요" */
+    fun greet() { replyShown = false; captionStyle("greet"); caption.text = GREETING }
+
+    fun setModel(label: String) { modelLabel.text = label }
+
+    fun setSpeaker(on: Boolean) { speakerBtn.icon = if (on) IconView.SPEAKER else IconView.SPEAKER_OFF }
+
+    fun setExpanded(on: Boolean) { expandBtn.icon = if (on) IconView.COLLAPSE else IconView.EXPAND }
 
     fun setState(s: String, msg: String?) {
-        orbBg.colors = when (s) {
-            "listening" -> intArrayOf(Color.parseColor("#86EFAC"), Color.parseColor("#15803D"), Color.parseColor("#052E16"))
-            "thinking" -> intArrayOf(Color.parseColor("#FCD34D"), Color.parseColor("#B45309"), Color.parseColor("#451A03"))
-            else -> intArrayOf(Color.parseColor("#7DD3FC"), Color.parseColor("#0369A1"), Color.parseColor("#082F49"))
-        }
-        status.text = msg ?: when (s) {
-            "listening" -> "듣고 있어요…"
-            "thinking" -> "생각 중…"
-            "speaking" -> "말하는 중 — 누르면 끊고 바로 들어요"
-            else -> "동그라미를 누르고 말씀하세요"
-        }
+        state = s
         pulse?.cancel(); pulse = null
-        orb.scaleX = 1f; orb.scaleY = 1f
-        if (s == "thinking" || s == "speaking") {
-            pulse = ValueAnimator.ofFloat(1f, 1.07f).apply {
-                duration = if (s == "speaking") 350L else 700L
-                repeatMode = ValueAnimator.REVERSE
-                repeatCount = ValueAnimator.INFINITE
-                addUpdateListener { a -> val v = a.animatedValue as Float; orb.scaleX = v; orb.scaleY = v }
-                start()
+        spin?.cancel(); spin = null
+        spark.scaleX = 1f; spark.scaleY = 1f
+        spark.color = if (s == "listening") ORANGE_DIM else ORANGE
+        when (s) {
+            "thinking" -> {
+                spin = ValueAnimator.ofFloat(0f, 360f).apply {
+                    duration = 2400L; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
+                    addUpdateListener { a -> spark.rotation = a.animatedValue as Float }
+                    start()
+                }
+                if (msg != null) { captionStyle("status"); caption.text = msg; replyShown = false }
+            }
+            "speaking" -> {
+                pulse = ValueAnimator.ofFloat(1f, 1.12f).apply {
+                    duration = 380L; repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE
+                    addUpdateListener { a -> val v = a.animatedValue as Float; spark.scaleX = v; spark.scaleY = v }
+                    start()
+                }
+            }
+            "listening" -> { if (msg != null) { captionStyle("status"); caption.text = msg } }
+            else -> {
+                if (msg != null) { captionStyle("status"); caption.text = msg }
+                else if (!replyShown) greet()
             }
         }
     }
 
     fun setLevel(rms: Float) {
-        val s = 1f + (rms.coerceIn(0f, 10f) / 40f)
-        orb.scaleX = s; orb.scaleY = s
+        val v = (rms.coerceIn(0f, 10f) / 10f)
+        spark.color = blend(ORANGE_DIM, ORANGE, v)
+        val s = 1f + v * 0.18f
+        spark.scaleX = s; spark.scaleY = s
     }
 
-    fun setInterim(t: String) { interim.text = t }
-
-    fun addMsg(role: String, text: String): TextView {
-        val tv = TextView(context).apply {
-            this.text = text
-            textSize = if (role == "user" || role == "assistant") 15f else 13f
-            setLineSpacing(0f, 1.2f)
-            setPadding(context.dp(12), context.dp(8), context.dp(12), context.dp(8))
-            when (role) {
-                "user" -> { setTextColor(C.text); background = rounded(C.user, context.dpf(14f)) }
-                "assistant" -> { setTextColor(C.text); background = rounded(C.panel, context.dpf(14f), context.dp(1), C.line) }
-                "error" -> { setTextColor(C.err); gravity = Gravity.CENTER }
-                else -> { setTextColor(C.dim); gravity = Gravity.CENTER }
-            }
-        }
-        val lp = LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = context.dp(8)
-            gravity = when (role) {
-                "user" -> Gravity.END
-                "assistant" -> Gravity.START
-                else -> Gravity.CENTER_HORIZONTAL
-            }
-        }
-        if (role == "user" || role == "assistant") tv.maxWidth = (resources.displayMetrics.widthPixels * 0.78).toInt()
-        log.addView(tv, lp)
-        scrollDown()
-        return tv
+    /** 듣는 중 들리는 말 (기울임 회색) */
+    fun setInterim(t: String) {
+        if (t.isBlank()) return
+        replyShown = false
+        captionStyle("interim"); caption.text = t
     }
 
-    fun removeMsg(v: View) { log.removeView(v) }
-    fun clear() { log.removeAllViews() }
-    fun scrollDown() { scroll.post { scroll.fullScroll(View.FOCUS_DOWN) } }
+    /** 사용자가 한 말 (다 들은 뒤) */
+    fun showUser(t: String) { replyShown = false; captionStyle("interim"); caption.text = t }
+
+    /** 쿠비스가 하는 말 (스트리밍으로 늘어남) */
+    fun showReply(t: String) {
+        replyShown = true
+        captionStyle("reply")
+        caption.text = if (t.length > 220) "…" + t.takeLast(220) else t
+    }
+
+    fun showError(t: String) { replyShown = true; captionStyle("error"); caption.text = t }
+
+    private fun blend(a: Int, b: Int, f: Float): Int {
+        fun ch(x: Int, y: Int) = (x + (y - x) * f).toInt()
+        return Color.rgb(ch(Color.red(a), Color.red(b)), ch(Color.green(a), Color.green(b)), ch(Color.blue(a), Color.blue(b)))
+    }
+}
+
+/** 별꽃 모양 마크 (가는 빛살이 여러 갈래로 퍼진 모양) */
+class SparkView(ctx: Context) : View(ctx) {
+    var color: Int = KuvisPanel.ORANGE
+        set(v) { field = v; invalidate() }
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    // 빛살 길이 (조금씩 달라서 손으로 그린 느낌)
+    private val lens = floatArrayOf(1f, .78f, .93f, .7f, .97f, .82f, .9f, .74f, 1f, .8f, .88f, .72f)
+
+    override fun onDraw(c: Canvas) {
+        val cx = width / 2f; val cy = height / 2f
+        val rad = min(width, height) / 2f * 0.95f
+        paint.color = color
+        paint.strokeWidth = rad * 0.10f
+        val n = lens.size
+        for (i in 0 until n) {
+            val a = Math.toRadians((i * 360.0 / n) - 90 + (if (i % 2 == 0) 0.0 else 4.0))
+            val inner = rad * 0.12f
+            val outer = rad * lens[i]
+            c.drawLine(cx + (cos(a) * inner).toFloat(), cy + (sin(a) * inner).toFloat(),
+                cx + (cos(a) * outer).toFloat(), cy + (sin(a) * outer).toFloat(), paint)
+        }
+    }
+}
+
+/** 선으로 그린 아이콘 (마이크·톱니바퀴·스피커·X·크게 보기) */
+class IconView(ctx: Context, icon: Int) : View(ctx) {
+    companion object {
+        const val MIC = 0; const val GEAR = 1; const val SPEAKER = 2; const val SPEAKER_OFF = 3
+        const val CLOSE = 4; const val EXPAND = 5; const val COLLAPSE = 6; const val CHEVRONS = 7
+    }
+    var icon: Int = icon
+        set(v) { field = v; invalidate() }
+    var color: Int = Color.parseColor("#E8E8EA")
+        set(v) { field = v; invalidate() }
+    /** 가장자리 여백 비율 */
+    var pad: Float = 0.2f
+        set(v) { field = v; invalidate() }
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+    }
+
+    init { isClickable = true }
+
+    override fun onDraw(c: Canvas) {
+        val s = min(width, height).toFloat()
+        val ox = (width - s) / 2f + s * pad; val oy = (height - s) / 2f + s * pad
+        val w = s * (1 - 2 * pad)
+        fun x(f: Float) = ox + w * f
+        fun y(f: Float) = oy + w * f
+        p.color = color
+        p.strokeWidth = maxOf(w * 0.085f, 2f)
+        p.style = Paint.Style.STROKE
+        when (icon) {
+            MIC -> {
+                c.drawRoundRect(RectF(x(.34f), y(.02f), x(.66f), y(.62f)), w * .16f, w * .16f, p)
+                val path = Path().apply { moveTo(x(.16f), y(.44f)); cubicTo(x(.16f), y(.86f), x(.84f), y(.86f), x(.84f), y(.44f)) }
+                c.drawPath(path, p)
+                c.drawLine(x(.5f), y(.76f), x(.5f), y(.96f), p)
+            }
+            GEAR -> {
+                c.drawCircle(x(.5f), y(.5f), w * .15f, p)
+                c.drawCircle(x(.5f), y(.5f), w * .32f, p)
+                val tooth = Paint(p).apply { strokeWidth = p.strokeWidth * 1.9f; strokeCap = Paint.Cap.SQUARE }
+                for (i in 0 until 8) {
+                    val a = Math.toRadians(i * 45.0)
+                    c.drawLine(x(.5f) + (cos(a) * w * .36f).toFloat(), y(.5f) + (sin(a) * w * .36f).toFloat(),
+                        x(.5f) + (cos(a) * w * .44f).toFloat(), y(.5f) + (sin(a) * w * .44f).toFloat(), tooth)
+                }
+            }
+            SPEAKER, SPEAKER_OFF -> {
+                val path = Path().apply {
+                    moveTo(x(.08f), y(.36f)); lineTo(x(.28f), y(.36f)); lineTo(x(.52f), y(.14f))
+                    lineTo(x(.52f), y(.86f)); lineTo(x(.28f), y(.64f)); lineTo(x(.08f), y(.64f)); close()
+                }
+                c.drawPath(path, p)
+                if (icon == SPEAKER) {
+                    c.drawArc(RectF(x(.50f), y(.34f), x(.74f), y(.66f)), -55f, 110f, false, p)
+                    c.drawArc(RectF(x(.52f), y(.18f), x(.96f), y(.82f)), -55f, 110f, false, p)
+                } else {
+                    c.drawLine(x(.68f), y(.36f), x(.94f), y(.64f), p)
+                    c.drawLine(x(.94f), y(.36f), x(.68f), y(.64f), p)
+                }
+            }
+            CLOSE -> {
+                c.drawLine(x(.1f), y(.1f), x(.9f), y(.9f), p)
+                c.drawLine(x(.9f), y(.1f), x(.1f), y(.9f), p)
+            }
+            EXPAND, COLLAPSE -> {
+                fun arrow(fx: Float, fy: Float, tx: Float, ty: Float) {
+                    c.drawLine(x(fx), y(fy), x(tx), y(ty), p)
+                    val dx = if (tx > fx) -1f else 1f; val dy = if (ty > fy) -1f else 1f
+                    c.drawLine(x(tx), y(ty), x(tx + dx * .3f), y(ty), p)
+                    c.drawLine(x(tx), y(ty), x(tx), y(ty + dy * .3f), p)
+                }
+                if (icon == EXPAND) { arrow(.58f, .42f, .92f, .08f); arrow(.42f, .58f, .08f, .92f) }
+                else { arrow(.92f, .08f, .58f, .42f); arrow(.08f, .92f, .42f, .58f) }
+            }
+            CHEVRONS -> {
+                c.drawLine(x(.2f), y(.38f), x(.5f), y(.12f), p); c.drawLine(x(.5f), y(.12f), x(.8f), y(.38f), p)
+                c.drawLine(x(.2f), y(.62f), x(.5f), y(.88f), p); c.drawLine(x(.5f), y(.88f), x(.8f), y(.62f), p)
+            }
+        }
+    }
 }
