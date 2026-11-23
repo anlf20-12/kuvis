@@ -186,8 +186,6 @@ class PhoneTools(private val ctx: Context) {
             .put(tool("forget", "기억한 것 중 이 말이 들어간 것을 지운다.",
                 JSONObject().put("query", p("string", "지울 내용의 일부")), listOf("query")))
             .put(tool("list_memory", "쿠비스가 기억하고 있는 것 목록.", JSONObject()))
-            .put(tool("feature_request", "T가 쿠비스에 새 기능이나 고칠 점을 말하면 기억장의 요청 목록에 적는다. Claude 앱에서 처리해 업데이트로 나온다.",
-                JSONObject().put("text", p("string", "요청 내용을 한두 문장으로 정리")), listOf("text")))
             .put(tool("read_notifications", "지금 휴대폰에 와 있는 알림(카톡·문자 등)을 읽는다. 번호를 함께 준다. (알림 도우미 앱 필요)",
                 JSONObject().put("app", p("string", "앱 이름으로 거르기(선택). 예: 카카오톡"))))
             .put(tool("reply_notification", "알림에 바로 답장한다(카톡 등). 반드시 받는 사람과 내용을 말하고 확인받은 뒤에만.",
@@ -269,24 +267,16 @@ class PhoneTools(private val ctx: Context) {
         "show_page" -> { Bus.showPage(a.getString("page")); "보여 줌" }
         "remember" -> {
             val f = a.getString("fact").trim()
-            if (MemorySync.enabled(ctx)) { MemorySync.editMemory(ctx, "기억 추가") { l -> l.filter { it != f } + f }; "기억장에 적음: $f" }
-            else { store.setMemory(store.memory().filter { it != f } + f); "기억함(휴대폰에만): $f" }
+            store.setMemory(store.memory().filter { it != f } + f); "기억함: $f"
         }
         "forget" -> {
             val q = a.getString("query").trim()
-            val before = if (MemorySync.enabled(ctx)) MemorySync.pullMemory(ctx) else store.memory()
+            val before = store.memory()
             val after = before.filter { !it.contains(q, ignoreCase = true) }
-            if (MemorySync.enabled(ctx)) MemorySync.editMemory(ctx, "기억 지움") { l -> l.filter { !it.contains(q, ignoreCase = true) } }
-            else store.setMemory(after)
+            store.setMemory(after)
             "지움 ${before.size - after.size}개"
         }
-        "list_memory" -> (if (MemorySync.enabled(ctx)) MemorySync.pullMemory(ctx) else store.memory()).ifEmpty { listOf("기억한 것 없음") }.joinToString("\n")
-        "feature_request" -> {
-            val t = a.getString("text").trim()
-            if (!MemorySync.enabled(ctx)) throw IllegalStateException("기억장이 연결되지 않아 요청을 적을 수 없음. 쿠비스 설정 > 기억장에서 연결하라고 안내")
-            MemorySync.addRequest(ctx, t)
-            "요청.md에 적음: $t"
-        }
+        "list_memory" -> store.memory().ifEmpty { listOf("기억한 것 없음") }.joinToString("\n")
         "backup_now" -> "백업함: " + Backup.save(ctx)
         "read_notifications" -> NotifyHelper.read(ctx, a.optString("app", ""))
         "reply_notification" -> NotifyHelper.reply(ctx, a.getInt("index"), a.getString("message"))

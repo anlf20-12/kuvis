@@ -64,6 +64,12 @@ class HomeActivity : Activity() {
     private lateinit var grids: List<GridPageView>
     private lateinit var dots: LinearLayout
     private lateinit var dockRow: LinearLayout
+    private lateinit var sceneBg: SceneBackground
+    private lateinit var scenePage: ScenePage
+    /** 첫 장(다누 그림) 다음부터 위젯 장. 위젯 장 번호 = 넘기기 장 번호 - SP */
+    private val SP = 1
+    private fun gridIdx() = pager.currentItem - SP
+    private var lastWeather: WInfo? = null
     private lateinit var overlay: FrameLayout
     private lateinit var deleteBar: TextView
     private val main = Handler(Looper.getMainLooper())
@@ -107,7 +113,7 @@ class HomeActivity : Activity() {
     private val onChanged: () -> Unit = { refreshAll() }
     private val onPage: (String) -> Unit = { p ->
         closeDrawer()
-        pager.setCurrentItem(when (p) { "calendar" -> 0; "memo" -> 2; else -> 1 }, true)
+        pager.setCurrentItem(when (p) { "calendar" -> 0 + SP; "memo" -> 2 + SP; "home" -> 1 + SP; else -> 0 }, true)
     }
     private val pkgReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { loadApps() }
@@ -127,6 +133,10 @@ class HomeActivity : Activity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
 
         root = FrameLayout(this).apply { fitsSystemWindows = true }
+        sceneBg = SceneBackground(this)
+        lastWeather = Weather.cached(this)
+        sceneBg.setKey(SceneSpots.key(lastWeather))
+        scenePage = ScenePage(this, sceneBg)
 
         calendarW = CalendarPage(this)
         weatherW = WeatherWidget(this)
@@ -138,7 +148,7 @@ class HomeActivity : Activity() {
         mainContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         grids = (0 until HomeGrid.PAGES).map { GridPageView(this, it).apply { setPadding(dp(6), dp(4), dp(6), dp(4)) } }
         pager = ViewPager2(this).apply {
-            adapter = PagesAdapter(grids)
+            adapter = PagesAdapter(listOf<View>(scenePage) + grids)
             offscreenPageLimit = 2
         }
         mainContent.addView(pager, LinearLayout.LayoutParams(MATCH, 0, 1f))
@@ -147,6 +157,14 @@ class HomeActivity : Activity() {
         mainContent.addView(dots, LinearLayout.LayoutParams(MATCH, dp(18)))
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) { drawDots(position) }
+            override fun onPageScrolled(position: Int, offset: Float, px: Int) {
+                // 다누 그림 장에서는 고정줄 대신 그림 속 대상, 다른 장에서는 그림을 살짝 어둡게
+                val sceneFrac = if (position == 0) 1f - offset else 0f
+                sceneBg.dim = (1f - sceneFrac) * 0.38f
+                dockRow.alpha = 1f - sceneFrac
+                dockRow.visibility = if (sceneFrac > 0.98f) View.INVISIBLE else View.VISIBLE
+                if (::drawer.isInitialized && drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
+            }
         })
         mainContent.addView(txt("⌃", 16f, Color.argb(170, 255, 255, 255), gravity = Gravity.CENTER).apply {
             setOnClickListener { openDrawer() }
@@ -176,9 +194,14 @@ class HomeActivity : Activity() {
         overlay.addView(homeZone, FrameLayout.LayoutParams(MATCH, dp(56)).apply { setMargins(dp(24), dp(8), dp(24), 0) })
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        setContentView(root)
-        pager.setCurrentItem(1, false)
-        drawDots(1)
+        // 맨 아래 층: 화면 전체(상태 표시줄 뒤까지) 다누 그림
+        val outer = FrameLayout(this)
+        outer.addView(sceneBg, FrameLayout.LayoutParams(MATCH, MATCH))
+        outer.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
+        setContentView(outer)
+        pager.setCurrentItem(0, false)
+        drawDots(0)
+        dockRow.visibility = View.INVISIBLE; dockRow.alpha = 0f
 
         Bus.onChanged(onChanged)
         Bus.onPage(onPage)
@@ -207,6 +230,7 @@ class HomeActivity : Activity() {
         refreshAll()
         Updater.checkQuietly(this)
         Hotword.sync(this)
+        main.removeCallbacks(sceneTick); main.post(sceneTick)
         wallLight = null; barsDark = null
         if (drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
         if (Build.VERSION.SDK_INT >= 33 && Hotword.enabled(this) && !mp0().getBoolean("askedNotif", false) &&
@@ -216,13 +240,7 @@ class HomeActivity : Activity() {
         }
         Backup.autoDaily(this)
         val mp = Prefs(this).p
-        if (MemorySync.enabled(this) && System.currentTimeMillis() - mp.getLong("lastMemPull", 0L) > 30 * 60_000L) {
-            mp.edit().putLong("lastMemPull", System.currentTimeMillis()).apply()
-            Thread {
-                try { MemorySync.pullMemory(this) } catch (e: Exception) { ErrorLog.add(this, "기억장 받기 실패", e.toString()) }
-                try { Journal.flush(this) } catch (e: Exception) { ErrorLog.add(this, "일지 실패", e.toString()) }
-            }.start()
-        }
+        if (mp.contains("ghToken")) mp.edit().remove("ghToken").remove("lastMemPull").apply()   // 기억장 빼면서 저장해 둔 토큰도 지움
         if (mp.getBoolean("crashedLastTime", false)) {
             mp.edit().putBoolean("crashedLastTime", false).apply()
             AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -236,7 +254,7 @@ class HomeActivity : Activity() {
         }
         Thread {
             val w = Weather.get(this)
-            runOnUiThread { weatherW.setWeather(w); setClockWeather(w) }
+            runOnUiThread { weatherW.setWeather(w); setClockWeather(w); lastWeather = w ?: lastWeather; updateScene() }
         }.start()
     }
 
@@ -249,6 +267,7 @@ class HomeActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
+        main.removeCallbacks(sceneTick)
         endDrag(cancel = true)
         endDrawerDrag()
         endResize()
@@ -258,7 +277,7 @@ class HomeActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         endResize()
-        if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(1, true)
+        if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(0, true)
     }
 
     @Deprecated("Deprecated in Java")
@@ -267,7 +286,7 @@ class HomeActivity : Activity() {
             resize != null -> endResize()
             openFolder != null -> closeFolder()
             drawer.visibility == View.VISIBLE -> closeDrawer()
-            else -> pager.setCurrentItem(1, true)
+            else -> pager.setCurrentItem(0, true)
         }
     }
 
@@ -302,7 +321,7 @@ class HomeActivity : Activity() {
 
     private fun drawDots(sel: Int) {
         dots.removeAllViews()
-        for (i in 0 until HomeGrid.PAGES) {
+        for (i in 0 until HomeGrid.PAGES + SP) {
             dots.addView(View(this).apply {
                 background = rounded(if (i == sel) Color.WHITE else Color.argb(110, 255, 255, 255), dpf(4f))
             }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { leftMargin = dp(4); rightMargin = dp(4) })
@@ -670,18 +689,49 @@ class HomeActivity : Activity() {
 
     /** 시계 모양 고르기: 미리보기를 보고 누르면 바로 바뀜 */
     private fun clockStylePicker() {
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
-        val sv = android.widget.ScrollView(this).apply { addView(list) }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(18), dp(18), dp(12)) }
+        list.addView(txt("시계 모양 고르기", 18f, Color.WHITE, bold = true).apply { setPadding(dp(2), 0, 0, dp(6)) })
+        val sv = android.widget.ScrollView(this).apply { addView(list); setBackgroundColor(Color.rgb(28, 28, 32)) }
         val dlg = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("시계 모양 고르기").setView(sv).setNegativeButton("닫기", null).create()
+            .setView(sv).setNegativeButton("닫기", null).create()
         val cur = clockW.currentStyle()
+        // 미리보기는 실제 홈의 시계 칸 크기 그대로, 뒤에는 홈 배경(다누 그림)을 깔아서
+        val cw = if (clockW.width > 0) clockW.width else dp(300)
+        val ch = if (clockW.height > 0) clockW.height else dp(104)
+        val back = sceneBackdrop()
         ClockWidget.NAMES.forEachIndexed { i, name ->
-            list.addView(txt((if (i == cur) "✓ " else "") + name, 14f, if (i == cur) C.accent else C.dim).apply { setPadding(dp(4), dp(12), 0, dp(6)) })
-            val prev = ClockWidget(this, i).apply { setOnClickListener { clockW.setStyle(i); dlg.dismiss() } }
-            list.addView(prev, LinearLayout.LayoutParams(MATCH, dp(104)))
+            list.addView(txt((if (i == cur) "✓  " else "") + name, 15f, if (i == cur) Color.rgb(250, 199, 117) else Color.rgb(225, 225, 230), bold = i == cur).apply {
+                setPadding(dp(2), dp(14), 0, dp(6))
+            }, LinearLayout.LayoutParams(MATCH, WRAP))
+            val box = FrameLayout(this).apply {
+                if (back != null) background = android.graphics.drawable.BitmapDrawable(resources, back)
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(v: View, o: android.graphics.Outline) { o.setRoundRect(0, 0, v.width, v.height, dpf(22f)) }
+                }
+                setOnClickListener { clockW.setStyle(i); dlg.dismiss() }
+            }
+            box.addView(ClockWidget(this, i).apply { isClickable = false; isLongClickable = false }, FrameLayout.LayoutParams(cw, ch, Gravity.CENTER))
+            list.addView(box, LinearLayout.LayoutParams(cw, ch).apply { gravity = Gravity.CENTER_HORIZONTAL })
         }
         dlg.show()
+        // 미리보기 칸이 들어가게 창 너비를 넓힘
+        dlg.window?.setLayout((cw + dp(36 + 16)).coerceAtMost(resources.displayMetrics.widthPixels), ViewGroup.LayoutParams.WRAP_CONTENT)
+        dlg.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.rgb(28, 28, 32)))
     }
+
+    /** 시계 고르기 미리보기 뒤에 깔 홈 배경 조각 (위젯 장처럼 살짝 어둡게) */
+    private fun sceneBackdrop(): Bitmap? = try {
+        if (sceneBg.width <= 0 || clockW.width <= 0) null else {
+            val full = Bitmap.createBitmap(sceneBg.width, sceneBg.height, Bitmap.Config.ARGB_8888)
+            val c = Canvas(full)
+            val d = sceneBg.dim; sceneBg.dim = 0.38f; sceneBg.draw(c); sceneBg.dim = d
+            val a = IntArray(2); val b = IntArray(2)
+            clockW.getLocationOnScreen(a); sceneBg.getLocationOnScreen(b)
+            val x = (a[0] - b[0]).coerceIn(0, full.width - 1); val y = (a[1] - b[1]).coerceIn(0, full.height - 1)
+            Bitmap.createBitmap(full, x, y, clockW.width.coerceAtMost(full.width - x), clockW.height.coerceAtMost(full.height - y))
+        }
+    } catch (_: Exception) { null }
 
     private fun snapshot(v: View): Bitmap? = try {
         Bitmap.createBitmap(v.width.coerceAtLeast(1), v.height.coerceAtLeast(1), Bitmap.Config.ARGB_8888).also { v.draw(Canvas(it)) }
@@ -758,7 +808,8 @@ class HomeActivity : Activity() {
 
     private fun updateTarget(rawX: Float, rawY: Float) {
         val d = drag ?: return
-        val page = pager.currentItem
+        val page = gridIdx()
+        if (page < 0) { grids.forEach { it.hideOutline() }; d.target = null; deleteBar.alpha = if (overDelete(rawY)) 1f else 0.8f; return }
         val g = grids[page]
         grids.filter { it !== g }.forEach { it.hideOutline() }
         if (overDelete(rawY)) { g.hideOutline(); d.target = null; deleteBar.alpha = 1f; return }
@@ -785,14 +836,14 @@ class HomeActivity : Activity() {
         if (flip != null) return
         flip = Runnable {
             flip = null
-            val to = (pager.currentItem + dir).coerceIn(0, HomeGrid.PAGES - 1)
+            val to = (pager.currentItem + dir).coerceIn(SP, HomeGrid.PAGES - 1 + SP)
             if (to != pager.currentItem) { grids.forEach { it.hideOutline() }; pager.setCurrentItem(to, true) }
         }.also { main.postDelayed(it, 600) }
     }
 
     private fun drop(rawX: Float, rawY: Float) {
         val d = drag ?: return
-        val page = pager.currentItem
+        val page = gridIdx().coerceAtLeast(0)
         if (overDelete(rawY) && d.fromPage != null) {
             removeFromHome(d.fromPage, d.item)
         } else {
@@ -833,7 +884,7 @@ class HomeActivity : Activity() {
 
     private fun beginResize(page: Int, item: GridItem) {
         endResize()
-        if (pager.currentItem != page) pager.setCurrentItem(page, false)
+        if (pager.currentItem != page + SP) pager.setCurrentItem(page + SP, false)
         val hs = (0..1).map {
             View(this).apply { background = rounded(Color.WHITE, dpf(14f), dp(3), C.accent); elevation = dpf(10f) }
                 .also { v -> overlay.addView(v, FrameLayout.LayoutParams(dp(28), dp(28))) }
@@ -944,11 +995,11 @@ class HomeActivity : Activity() {
                         decided = true
                         grids.forEach { it.cancelLongPress2() }
                         if (drawer.visibility != View.VISIBLE) {
-                            val g = grids[pager.currentItem]
+                            val g: View = grids.getOrNull(gridIdx()) ?: scenePage
                             if (dy < 0 && (startInDock || !canScrollAt(g, downX, downY, 1))) {
                                 dragMode = 1
                                 prepareDrawer()
-                                drawer.translationY = drawerHeight()
+                                setDrawerPos(drawerHeight())
                                 drawer.visibility = View.VISIBLE
                             } else if (dy > 0 && !canScrollAt(g, downX, downY, -1)) {
                                 dragMode = 3
@@ -983,7 +1034,7 @@ class HomeActivity : Activity() {
                 if (dragMode == 1 || dragMode == 2) {
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
-                    val open = when { vy < -700 -> true; vy > 700 -> false; else -> drawer.translationY < drawerHeight() / 2 }
+                    val open = when { vy < -700 -> true; vy > 700 -> false; else -> drawerPos < drawerHeight() / 2 }
                     settleDrawer(open)
                     dragMode = 0
                     return true
@@ -991,7 +1042,7 @@ class HomeActivity : Activity() {
                 if (dragMode == 4) {
                     vt?.computeCurrentVelocity(1000)
                     val vy = vt?.yVelocity ?: 0f
-                    val close = vy < -700 || (vy < 700 && drawer.translationY < -drawerHeight() / 4)
+                    val close = vy < -700 || (vy < 700 && drawerPos < -drawerHeight() / 4)
                     settleDrawer(!close, up = true)
                     dragMode = 0
                     return true
@@ -1067,6 +1118,50 @@ class HomeActivity : Activity() {
         }
     }
 
+    // ---------- 다누 그림 ----------
+    /** 그림 속 대상 i번 = 고정줄 i번째 앱 */
+    fun sceneApp(i: Int): String? {
+        val d = store.dock() ?: defaultDock()
+        return d.getOrNull(i)?.takeIf { p -> p.isNotEmpty() && apps.any { it.pkg == p } }
+    }
+
+    fun pickSceneApp(i: Int) {
+        if (apps.isEmpty()) return
+        val list = apps.sortedWith(compareBy(Collator.getInstance(Locale.KOREAN)) { it.label })
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("${SceneSpots.names[i]}를 누르면 열 앱")
+            .setItems(list.map { it.label }.toTypedArray()) { _, k ->
+                val pkg = list[k].pkg
+                val d = (store.dock() ?: defaultDock()).toMutableList()
+                while (d.size <= i) d.add("")
+                val old = d[i]
+                val at = d.indexOf(pkg)
+                if (at >= 0 && at != i) d[at] = old   // 다른 자리에 있던 앱이면 서로 바꿈
+                d[i] = pkg
+                store.setDock(d.take(5))
+                drawDock()
+                toast("${SceneSpots.names[i]} → ${list[k].label}")
+            }.show()
+    }
+
+    private val sceneTick = object : Runnable {
+        override fun run() { updateScene(); main.postDelayed(this, 60_000) }
+    }
+
+    /** 날씨·시간에 맞춰 그림 바꾸기 */
+    private fun updateScene() {
+        val k = SceneSpots.key(lastWeather)
+        if (k != sceneBg.key) {
+            sceneBg.animate().cancel()
+            sceneBg.animate().alpha(0.35f).setDuration(220).withEndAction {
+                sceneBg.setKey(k)
+                sceneBg.animate().alpha(1f).setDuration(380).start()
+                wallLight = null; barsDark = null
+                if (drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
+            }.start()
+        }
+    }
+
     /** 고정줄 몇 번째에 넣을지 묻기 (others: 이 앱을 뺀 지금 고정줄) */
     private fun askDockPosition(app: AppEntry, others: List<String>) {
         fun name(p: String) = apps.firstOrNull { it.pkg == p }?.label ?: p
@@ -1113,7 +1208,7 @@ class HomeActivity : Activity() {
             .setTitle(app.label)
             .setItems(items.toTypedArray()) { _, w ->
                 when (items[w]) {
-                    "홈 화면에 추가" -> { closeDrawer(); addAppToHome(pager.currentItem, app.pkg, null) }
+                    "홈 화면에 추가" -> { closeDrawer(); addAppToHome(if (gridIdx() < 0) 1 else gridIdx(), app.pkg, null) }
                     "고정줄에서 빼기" -> { store.setDock(dock - app.pkg); drawDock() }
                     "고정줄에 넣기" -> {
                         if (dock.size >= 5) toast("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")
@@ -1143,9 +1238,13 @@ class HomeActivity : Activity() {
         Build.VERSION.SDK_INT >= 31 && (getSystemService(WindowManager::class.java)?.isCrossWindowBlurEnabled == true)
 
     /** 서랍 위치에 맞춰 홈 흐리기·배경 블러 */
+    private var drawerPos = 0f
     private fun setDrawerPos(ty: Float) {
-        drawer.translationY = ty
+        drawerPos = ty
         val frac = (1f - abs(ty) / drawerHeight()).coerceIn(0f, 1f)
+        // 밀려 올라오는 대신 제자리에서 서서히 (손가락 방향으로 아주 조금만 움직임)
+        drawer.alpha = frac
+        drawer.translationY = ty * 0.06f
         mainContent.alpha = 1f - frac
         if (Build.VERSION.SDK_INT >= 31 && blurSupported()) window.setBackgroundBlurRadius((frac * 70).toInt())
         // 위 상태 표시줄·아래 내비게이션 줄도 서랍과 같은 색으로 (안 그러면 배경화면이 그대로 보임)
@@ -1159,6 +1258,7 @@ class HomeActivity : Activity() {
     /** 배경화면이 밝으면 상태 표시줄 글씨(시간·배터리)를 어둡게 */
     private var wallLight: Boolean? = null
     private fun wallpaperIsLight(): Boolean {
+        if (::sceneBg.isInitialized) return sceneBg.topIsLight()
         wallLight?.let { return it }
         val v = try {
             if (Build.VERSION.SDK_INT >= 27) {
@@ -1304,7 +1404,7 @@ class HomeActivity : Activity() {
     private fun openDrawer() {
         if (drawer.visibility == View.VISIBLE) return
         prepareDrawer()
-        drawer.translationY = drawerHeight()
+        setDrawerPos(drawerHeight())
         drawer.visibility = View.VISIBLE
         settleDrawer(true)
     }
@@ -1326,7 +1426,7 @@ class HomeActivity : Activity() {
     }
 
     private fun settleDrawer(open: Boolean, up: Boolean = false) {
-        val from = drawer.translationY
+        val from = drawerPos
         val to = if (open) 0f else if (up) -drawerHeight() else drawerHeight()
         drawer.visibility = View.VISIBLE
         android.animation.ValueAnimator.ofFloat(from, to).apply {

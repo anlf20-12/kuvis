@@ -108,7 +108,7 @@ class HotwordService : Service() {
         fun resume() { paused = false; self?.let { s -> s.main.postDelayed({ s.listen() }, 800) } }
         fun pause() {
             paused = true
-            self?.let { s -> s.main.post { try { s.rec?.cancel() } catch (_: Exception) {}; s.listening = false } }
+            self?.let { s -> s.main.post { try { s.rec?.cancel(); s.rec?.destroy() } catch (_: Exception) {}; s.rec = null; s.listening = false } }
         }
     }
 

@@ -165,11 +165,11 @@ class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
     // ---------------------------------------------------------------
     private fun captionStyle(kind: String) {
         when (kind) {
-            "greet" -> { caption.textSize = 27f; caption.typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL); caption.setTextColor(GREY) }
-            "interim" -> { caption.textSize = 21f; caption.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC); caption.setTextColor(GREY) }
-            "reply" -> { caption.textSize = 18f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#D4D6DA")) }
-            "status" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(GREY) }
-            "error" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#F2A39A")) }
+            "greet" -> { caption.textSize = 20f; caption.typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL); caption.setTextColor(GREY) }
+            "interim" -> { caption.textSize = 18f; caption.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC); caption.setTextColor(GREY) }
+            "reply" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#D4D6DA")) }
+            "status" -> { caption.textSize = 14f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(GREY) }
+            "error" -> { caption.textSize = 14f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#F2A39A")) }
         }
     }
 

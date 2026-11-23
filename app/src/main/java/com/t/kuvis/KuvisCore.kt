@@ -40,7 +40,7 @@ class Prefs(ctx: Context) {
     val p: SharedPreferences = ctx.getSharedPreferences("kuvis", Context.MODE_PRIVATE)
     val key get() = p.getString("key", "") ?: ""
     /** "auto" = 간단한 명령은 Haiku, 나머지는 Sonnet */
-    val model get() = p.getString("model", "auto") ?: "auto"
+    val model get() = p.getString("model", "claude-haiku-5-5") ?: "claude-haiku-5-5"
     val rate get() = p.getFloat("rate", 1.1f)
     val useSearch get() = p.getBoolean("search", true)
     var loop: Boolean
@@ -103,8 +103,13 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     /** 대화 창이 가려졌을 때(다른 앱·알림창) 다시 듣기를 멈춤 */
     var halted = false; private set
     private var listenRetries = 0
+    /** 못 알아들은 말·쿠비스에게 한 말이 아닌 것이 이어진 횟수 (3번이면 창 닫기) */
+    private var misses = 0
+    private var heardSpeech = false
 
     init {
+        // 요금 줄이기: 한 번만 기본을 Haiku로 (나중에 T가 다시 고르면 그대로 둠)
+        if (!prefs.p.getBoolean("modelMig1", false)) prefs.p.edit().putString("model", "claude-haiku-5-5").putBoolean("modelMig1", true).apply()
         loadHistory()
         panel.greet()
         panel.micBtn.setOnClickListener { tap() }
@@ -170,6 +175,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (prefs.key.isBlank()) { SettingsActivity.open(act); return }
         halted = false
         listenRetries = 0
+        misses = 0
         startListening()
     }
 
@@ -241,7 +247,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) { listenRetries = 0 }
-            override fun onBeginningOfSpeech() {}
+            override fun onBeginningOfSpeech() { heardSpeech = true }
             override fun onRmsChanged(rmsdB: Float) { if (state == "listening") panel.setLevel(rmsdB) }
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
@@ -259,8 +265,11 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 if (state != "listening") return
                 when (error) {
                     // 말이 없으면 꺼지지 않고 계속 기다림
-                    SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> relisten(250)
-                    SpeechRecognizer.ERROR_CLIENT, SpeechRecognizer.ERROR_RECOGNIZER_BUSY ->
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> relisten(250)
+                    // 말소리는 났는데 글로 못 바꿈
+                    SpeechRecognizer.ERROR_NO_MATCH -> if (heardSpeech && countMiss()) Unit else relisten(250)
+                    // 4 서버, 11 연결 끊김(SERVER_DISCONNECTED), 5 클라이언트, 8 바쁨 → 인식기를 새로 만들어 다시
+                    SpeechRecognizer.ERROR_CLIENT, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_SERVER, 11, 10, 13 ->
                         if (++listenRetries <= 4) relisten(900L * listenRetries)
                         else goIdle("마이크가 잠깐 멈췄어요. 마이크를 눌러 주세요")
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> goIdle("마이크 권한을 허용해 주세요")
@@ -278,6 +287,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.packageName)
         }
+        heardSpeech = false
+        lastListenStart = System.currentTimeMillis()
         setState("listening")
         r.startListening(intent)
     }
@@ -322,6 +333,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     private fun enqueueSpeech(sentence: String) {
         val s = cleanForSpeech(sentence)
+        if (!s.any { it.isLetterOrDigit() }) return
         if (s.isEmpty() || !ttsReady || !prefs.speak) return
         muteBeep(false)
         if (state != "speaking") setState("speaking")
@@ -370,7 +382,22 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             if (leaves) { goIdle(ended = true); return }
         }
         // 대화 창이 열려 있는 동안은 계속 들음 (X를 눌러야 끝남)
-        if (halted) goIdle() else startListening()
+        // 답 읽기가 끝나면 잠깐 쉬었다가 다시 듣기 (바로 켜면 인식기 연결이 끊기는 일이 있음)
+        if (halted) goIdle() else {
+            setState("listening")
+            main.postDelayed({
+                if (!halted && state == "listening" && !askingPermission && recognizerIdle()) { muteBeep(true); startListening(); main.postDelayed({ muteBeep(false) }, 700) }
+            }, 450)
+        }
+    }
+
+    private var lastListenStart = 0L
+    private fun recognizerIdle() = System.currentTimeMillis() - lastListenStart > 300
+
+    /** 3번 이어지면 창을 닫음. 닫았으면 true */
+    private fun countMiss(): Boolean {
+        if (++misses >= 3) { misses = 0; goIdle(ended = true); return true }
+        return false
     }
 
     // =====================================================================
@@ -415,33 +442,30 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     // =====================================================================
     // Claude
-    private fun systemPrompt(): String {
+    /** 매번 같은 설명 (요청 사이에 캐시로 재사용돼 요금이 줄어듦) */
+    private val staticPrompt = listOf(
+        "너는 T의 음성 비서 '쿠비스'다. T의 안드로이드 휴대폰 홈 화면이자 비서이고, 답은 소리로 읽힌다.",
+        "한국어로 말하듯 아주 짧게(보통 한 문장). 목록·마크다운·이모지·URL 금지. T를 가끔만 'T'라고 부른다.",
+        "음성 인식이라 잘못 들린 단어는 뜻을 짐작한다. 정말 모호할 때만 되묻는다.",
+        "시키는 일은 도구로 바로 한다. 도구 전후로 설명하지 않는다. 일이 잘되면 아무 글도 쓰지 말고 끝낸다(화면에 ✓만 뜸). 안 됐을 때만 이유를 한 문장으로. 질문에는 짧게 답한다.",
+        "T가 쿠비스에게 하는 말이 아닌 것 같으면(옆 사람과의 대화, TV 소리, 혼잣말, 뜻 없는 소리) 도구를 쓰지 말고 '…' 한 글자만 답한다.",
+        "전화·문자·답장 보내기, 일정·할 일·메모 지우기는 먼저 무엇을 할지 말하고 '할까요?'로 확인받는다. 그 밖의 추가·완료·알람·타이머·앱 열기·손전등은 바로 한다.",
+        "홈 화면: 첫 장 다누 그림(그림 속 동물·바구니가 고정 앱), 다음 장들에 달력·날씨·시계·할 일·메모. 해야 할 일은 todo, 기억해 둘 글은 memo, 일정은 캘린더 도구.",
+        "날씨는 get_weather 먼저. 쿠비스 설정은 open_kuvis_settings, TTS 엔진은 open_settings page=tts.",
+        "성경 구절은 개역개정 본문이 확실할 때만 인용하고, 아니면 장절과 요약만.",
+        "T가 '기억해 줘'라고 하거나 앞으로 알아야 할 사실을 말하면 remember, 잊어 달라면 forget."
+    ).joinToString("\n")
+
+    private fun systemBlocks(): JSONArray {
         val fmt = SimpleDateFormat("yyyy년 M월 d일 EEEE a h시 m분", Locale.KOREAN)
         fmt.timeZone = TimeZone.getTimeZone("Asia/Seoul")
-        val lines = mutableListOf(
-            "너는 T의 개인 음성 비서 '쿠비스'다. T의 안드로이드 휴대폰 홈 화면(런처)이자 비서로 돌아가고, 답은 소리로 읽힌다.",
-            "규칙: 한국어로, 말하듯 짧고 자연스럽게 답한다. 보통 1~3문장. 목록·표·마크다운·이모지·URL을 쓰지 않는다.",
-            "긴 설명이 필요하면 핵심부터 말하고 '더 자세히 말씀드릴까요?'처럼 묻는다.",
-            "사용자를 'T'라고 부르되 매번 부르지는 않는다.",
-            "음성 인식으로 받은 말이라 잘못 들린 단어가 있을 수 있으니 뜻을 짐작하고, 정말 모호할 때만 되묻는다.",
-            "홈 화면은 세 페이지다. 왼쪽: 달력(구글 캘린더 일정), 가운데: 날씨·시계·할 일, 오른쪽: 메모. 아래에 고정 앱 다섯 개.",
-            "일정은 캘린더 도구, 할 일은 todo 도구, 저장해 둘 글·생각·번호 같은 건 memo 도구를 쓴다. 할 일과 메모가 헷갈리면: 해야 하는 일이면 할 일, 기억해 둘 내용이면 메모.",
-            "시키는 일은 도구로 직접 한다. 도구를 쓰기 전에는 말하지 말고 바로 쓰고, 끝난 뒤 결과를 한두 문장으로 말한다. 바꾼 페이지를 보여 주면 좋을 때는 show_page를 쓴다.",
-            "전화 걸기, 문자 보내기, 일정·할 일·메모 지우기는 실행 전에 무엇을 하는지 말하고 '할까요?'로 확인받는다. 사용자가 그러라고 하면 그때 실행한다.",
-            "일정·할 일·메모 추가, 완료 표시, 알람·타이머, 앱 열기, 손전등 같은 건 확인 없이 바로 한다. 날짜와 시간은 아래 현재 시각을 기준으로 계산한다.",
-            "'쿠비스 설정'·'목소리 설정'처럼 쿠비스 자체 설정을 말하면 open_kuvis_settings를 쓴다. 휴대폰의 음성 출력(TTS) 엔진 설정은 open_settings page=tts.",
-            "날씨는 get_weather를 먼저 쓰고, 그걸로 모자랄 때만 웹 검색을 쓴다.",
-            "앱 정리: 전체 앱 서랍(홈에서 위로 쓸기)은 폴더로 나뉘어 있다. 폴더 옮기기·이름 바꾸기는 list_folders, move_apps_to_folder, rename_folder로 바로 한다. 안 쓰는 앱 지우기는 list_apps(last_used)로 찾아 말해 주고, 지울지 물은 뒤 uninstall_app으로 삭제 창을 띄운다.",
-            "성경 구절은 개역개정 본문이 확실할 때만 그대로 인용하고, 확실하지 않으면 장절과 내용 요약만 말한다.",
-            "현재 시각: ${fmt.format(Date())} (한국)."
-        )
-        if (prefs.extra.isNotBlank()) lines.add("T가 알려 둔 것: ${prefs.extra}")
+        val dyn = mutableListOf("현재 시각: ${fmt.format(Date())} (한국).")
+        if (prefs.extra.isNotBlank()) dyn.add("T가 알려 둔 것: ${prefs.extra}")
         val mem = Store(act).memory()
-        if (mem.isNotEmpty()) lines.add("T에 대해 기억하고 있는 것(필요할 때만 자연스럽게 쓴다):\n" + mem.joinToString("\n") { "- $it" })
-        lines.add("T가 '기억해 줘'라고 하거나 앞으로도 알아야 할 사실을 말하면 remember 도구로 저장한다. 잊어 달라고 하면 forget.")
-        lines.add("T가 쿠비스에 새 기능이나 고칠 점을 말하면(예: '이런 기능 있으면 좋겠어') feature_request로 적고, Claude 앱에서 처리되면 업데이트로 나온다고 말한다.")
-        lines.add("알림(카톡 등) 읽기·답장: read_notifications, reply_notification (별도 '알림 도우미' 앱이 있어야 함). 답장은 보내기 전에 누구에게 무엇을 보낼지 말하고 확인받는다.")
-        return lines.joinToString("\n")
+        if (mem.isNotEmpty()) dyn.add("T에 대해 기억하는 것(필요할 때만):\n" + mem.joinToString("\n") { "- $it" })
+        return JSONArray()
+            .put(JSONObject().put("type", "text").put("text", staticPrompt).put("cache_control", JSONObject().put("type", "ephemeral")))
+            .put(JSONObject().put("type", "text").put("text", dyn.joinToString("\n")))
     }
 
     private fun startMessages(): JSONArray {
@@ -467,8 +491,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         }
         return JSONObject()
             .put("model", turnModel)
-            .put("max_tokens", 2000)
-            .put("system", systemPrompt())
+            .put("max_tokens", 800)
+            .put("system", systemBlocks())
             .put("messages", msgs)
             .put("tools", tools)
             .put("stream", true)
@@ -654,10 +678,21 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (err != null) ErrorLog.add(act, "Claude 답 중간 오류 ($turnModel)", err)
         splitter.flush()
         var full = turnText.toString()
-        if (full.isBlank()) { full = "됐어요."; panel.showReply(full); enqueueSpeech(full) }
+        if (full.isNotBlank() && !full.any { it.isLetterOrDigit() }) {
+            // 쿠비스에게 한 말이 아니라고 모델이 판단 → 조용히 넘기고 셈
+            if (history.isNotEmpty() && history.last().first == "user") history.removeAt(history.size - 1)
+            saveHistory()
+            panel.greet()
+            if (countMiss()) return
+            streamDone = true
+            if (pendingUtter == 0) finishTurn()
+            return
+        }
+        misses = 0
+        // 일이 잘되면 말없이 끝냄 (화면에만 표시)
+        if (full.isBlank()) { full = "됐어요."; panel.showReply("✓ 했어요") }
         history.add("assistant" to full)
         saveHistory()
-        history.lastOrNull { it.first == "user" }?.second?.let { u -> try { Journal.add(act, u, full) } catch (_: Exception) {} }
         streamDone = true
         if (pendingUtter == 0) finishTurn()
     }

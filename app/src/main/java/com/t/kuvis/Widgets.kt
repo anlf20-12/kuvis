@@ -117,7 +117,7 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         val st = currentStyle()
         if (st == style && childCount > 0) { tick(); return }
         style = st
-        removeAllViews()
+        removeAllViews(); fits.clear()
         ticker?.let { main.removeCallbacks(it) }; ticker = null
         when (st) {
             1 -> buildStacked()
@@ -127,6 +127,7 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
             5 -> buildAnalog()
             else -> buildBasic()
         }
+        if (fits.isNotEmpty()) post { applyFits() }
     }
 
     private fun tc(fmt12: String, fmt24: String = fmt12) = TextClock(home).apply {
@@ -136,6 +137,27 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
 
     private fun auto(v: android.widget.TextView, lo: Int, hi: Int) =
         v.setAutoSizeTextTypeUniformWithConfiguration(lo, hi, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+
+    /** 글자 크기를 시계 칸 크기에 맞춰 직접 계산 (높이의 hf, 너비의 wf 안에 sample이 들어가게) */
+    private val fits = mutableListOf<Triple<android.widget.TextView, Pair<Float, Float>, String>>()
+    private fun fit(v: android.widget.TextView, hf: Float, wf: Float, sample: String) {
+        fits.add(Triple(v, hf to wf, sample)); v.textSize = 30f
+    }
+    private fun applyFits() {
+        val w = width - paddingLeft - paddingRight; val h = height - paddingTop - paddingBottom
+        if (w <= 0 || h <= 0) return
+        for ((v, f, sample) in fits) {
+            var px = h * f.first
+            val paint = android.graphics.Paint(v.paint).apply { textSize = px }
+            val tw = paint.measureText(sample) * (1f + v.letterSpacing)
+            if (tw > w * f.second) px *= (w * f.second) / tw
+            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, px.coerceAtLeast(home.dpf(10f)))
+        }
+    }
+    override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
+        super.onSizeChanged(w, h, ow, oh)
+        if (fits.isNotEmpty()) post { applyFits() }
+    }
 
     private fun pad(h: Int, v: Int) = setPadding(home.dp(h), home.dp(v), home.dp(h), home.dp(v))
 
@@ -159,8 +181,8 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         val dh = ClockFonts.get(home, "DoHyeon-Regular.ttf", android.graphics.Typeface.DEFAULT)
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         val nums = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        nums.addView(tc("hh", "HH").apply { typeface = bh; setTextColor(cText); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
-        nums.addView(tc("mm").apply { typeface = bh; setTextColor(cText); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
+        nums.addView(tc("hh", "HH").apply { typeface = bh; setTextColor(cText); gravity = Gravity.CENTER; fit(this, 0.44f, 0.42f, "88") }, LinearLayout.LayoutParams(WRAP, WRAP))
+        nums.addView(tc("mm").apply { typeface = bh; setTextColor(cText); gravity = Gravity.CENTER; fit(this, 0.44f, 0.42f, "88") }, LinearLayout.LayoutParams(WRAP, WRAP))
         row.addView(nums, LinearLayout.LayoutParams(WRAP, MATCH))
         val side = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(home.dp(16), 0, 0, 0) }
         side.addView(tc("a", "").apply { typeface = dh; setTextColor(cSub); textSize = 17f })
@@ -182,10 +204,12 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         col.addView(top, LinearLayout.LayoutParams(MATCH, WRAP))
         col.addView(android.view.View(home).apply { setBackgroundColor(cFaint) }, LinearLayout.LayoutParams(MATCH, home.dp(1)).apply { topMargin = home.dp(4) })
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        row.addView(tc("h:mm", "HH:mm").apply { typeface = gb; setTextColor(cText); auto(this, 16, 42); letterSpacing = 0.06f; gravity = Gravity.CENTER },
-            LinearLayout.LayoutParams(WRAP, MATCH))
-        row.addView(tc("a", "").apply { typeface = gr; setTextColor(cSub); textSize = 14f; setPadding(home.dp(6), 0, 0, home.dp(6)) },
-            LinearLayout.LayoutParams(WRAP, WRAP).apply { gravity = Gravity.BOTTOM })
+        // 시간과 오후를 같은 글자 밑줄(베이스라인)에 맞춤
+        row.isBaselineAligned = true
+        row.addView(tc("h:mm", "HH:mm").apply { typeface = gb; setTextColor(cText); letterSpacing = 0.06f; fit(this, 0.5f, 0.72f, "12:88") },
+            LinearLayout.LayoutParams(WRAP, WRAP))
+        row.addView(tc("a", "").apply { typeface = gr; setTextColor(cSub); textSize = 14f; setPadding(home.dp(6), 0, 0, 0) },
+            LinearLayout.LayoutParams(WRAP, WRAP))
         col.addView(row, LinearLayout.LayoutParams(MATCH, 0, 1f))
         addView(col, LayoutParams(MATCH, MATCH))
     }
