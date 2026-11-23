@@ -228,7 +228,6 @@ class CalendarPage(home: HomeActivity) : Page(home) {
             if (date == selected) background = rounded(Color.argb(60, 255, 255, 255), home.dpf(8f))
             setOnClickListener {
                 selected = date
-                if (YearMonth.from(date) != ym) ym = YearMonth.from(date)
                 refresh()
             }
         }
