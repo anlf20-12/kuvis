@@ -100,7 +100,7 @@ object Shortcuts {
 
 /** 빈자리 찾아 넣기: 바라는 장부터, 큰 크기부터 최소 크기까지 */
 fun HomeGrid.placeAnywhere(ctx: Context, kind: String, pkg: String, w: Int, h: Int, mw: Int, mh: Int, preferPage: Int, cell: Pair<Int, Int>? = null): Boolean {
-    val pages = listOf(preferPage) + (0 until PAGES).filter { it != preferPage }
+    val pages = listOf(0)   // 바둑판은 달력 장(0번)만 보임
     for (p in pages) {
         val list = items(ctx, p)
         for (hh in h downTo mh) for (ww in w downTo mw) {

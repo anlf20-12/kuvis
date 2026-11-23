@@ -186,6 +186,12 @@ class PhoneTools(private val ctx: Context) {
             .put(tool("forget", "기억한 것 중 이 말이 들어간 것을 지운다.",
                 JSONObject().put("query", p("string", "지울 내용의 일부")), listOf("query")))
             .put(tool("list_memory", "쿠비스가 기억하고 있는 것 목록.", JSONObject()))
+            .put(tool("timetable", "제자훈련 학기 시간표(월~금 × 오전·오후·모임, 칸마다 이름, 고정 여부)를 읽는다.", JSONObject()))
+            .put(tool("timetable_set", "제자훈련 시간표의 한 칸 이름을 바꾼다. 비우려면 name을 빈 글자로.",
+                JSONObject().put("day", p("string", "월·화·수·목·금 중 하나"))
+                    .put("slot", p("string", "오전·오후·모임 중 하나"))
+                    .put("name", p("string", "넣을 이름"))
+                    .put("fixed", p("boolean", "고정(진한 색)으로 표시할지")), listOf("day", "slot", "name")))
             .put(tool("read_notifications", "지금 휴대폰에 와 있는 알림(카톡·문자 등)을 읽는다. 번호를 함께 준다. (알림 도우미 앱 필요)",
                 JSONObject().put("app", p("string", "앱 이름으로 거르기(선택). 예: 카카오톡"))))
             .put(tool("reply_notification", "알림에 바로 답장한다(카톡 등). 반드시 받는 사람과 내용을 말하고 확인받은 뒤에만.",
@@ -275,6 +281,15 @@ class PhoneTools(private val ctx: Context) {
             val after = before.filter { !it.contains(q, ignoreCase = true) }
             store.setMemory(after)
             "지움 ${before.size - after.size}개"
+        }
+        "timetable" -> Timetable.text(ctx)
+        "timetable_set" -> {
+            val c = Timetable.DAYS.indexOf(a.getString("day").trim().take(1))
+            val r = Timetable.SLOTS.indexOf(a.getString("slot").trim())
+            if (c < 0 || r < 0) throw IllegalArgumentException("요일은 월~금, 칸은 오전·오후·모임 중 하나")
+            val old = Timetable.load(ctx)[r][c]
+            Timetable.set(ctx, r, c, Timetable.Cell(a.getString("name").trim(), if (a.has("fixed")) a.getBoolean("fixed") else old.fixed))
+            Bus.changed(); "바꿈"
         }
         "list_memory" -> store.memory().ifEmpty { listOf("기억한 것 없음") }.joinToString("\n")
         "backup_now" -> "백업함: " + Backup.save(ctx)

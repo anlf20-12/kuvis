@@ -66,9 +66,11 @@ class HomeActivity : Activity() {
     private lateinit var dockRow: LinearLayout
     private lateinit var sceneBg: SceneBackground
     private lateinit var scenePage: ScenePage
-    /** 첫 장(다누 그림) 다음부터 위젯 장. 위젯 장 번호 = 넘기기 장 번호 - SP */
-    private val SP = 1
-    private fun gridIdx() = pager.currentItem - SP
+    /** 넘기는 장: 0 달력(바둑판 0번), 1 다누 그림, 2 할 일·메모·시간표 */
+    private val SCENE = 1
+    private lateinit var page3: LinearLayout
+    private lateinit var timetableW: TimetableCard
+    private fun gridIdx() = if (pager.currentItem == 0) 0 else -1
     private var lastWeather: WInfo? = null
     private lateinit var overlay: FrameLayout
     private lateinit var deleteBar: TextView
@@ -113,7 +115,7 @@ class HomeActivity : Activity() {
     private val onChanged: () -> Unit = { refreshAll() }
     private val onPage: (String) -> Unit = { p ->
         closeDrawer()
-        pager.setCurrentItem(when (p) { "calendar" -> 0 + SP; "memo" -> 2 + SP; "home" -> 1 + SP; else -> 0 }, true)
+        pager.setCurrentItem(when (p) { "calendar" -> 0; "memo" -> 2; else -> SCENE }, true)
     }
     private val pkgReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { loadApps() }
@@ -148,7 +150,7 @@ class HomeActivity : Activity() {
         mainContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         grids = (0 until HomeGrid.PAGES).map { GridPageView(this, it).apply { setPadding(dp(6), dp(4), dp(6), dp(4)) } }
         pager = ViewPager2(this).apply {
-            adapter = PagesAdapter(listOf<View>(scenePage) + grids)
+            adapter = PagesAdapter(listOf<View>(grids[0], scenePage, buildPage3()))
             offscreenPageLimit = 2
         }
         mainContent.addView(pager, LinearLayout.LayoutParams(MATCH, 0, 1f))
@@ -159,7 +161,7 @@ class HomeActivity : Activity() {
             override fun onPageSelected(position: Int) { drawDots(position) }
             override fun onPageScrolled(position: Int, offset: Float, px: Int) {
                 // 다누 그림 장에서는 고정줄 대신 그림 속 대상, 다른 장에서는 그림을 살짝 어둡게
-                val sceneFrac = if (position == 0) 1f - offset else 0f
+                val sceneFrac = (1f - abs(position + offset - SCENE)).coerceIn(0f, 1f)
                 sceneBg.dim = (1f - sceneFrac) * 0.38f
                 dockRow.alpha = 1f - sceneFrac
                 dockRow.visibility = if (sceneFrac > 0.98f) View.INVISIBLE else View.VISIBLE
@@ -199,8 +201,8 @@ class HomeActivity : Activity() {
         outer.addView(sceneBg, FrameLayout.LayoutParams(MATCH, MATCH))
         outer.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(outer)
-        pager.setCurrentItem(0, false)
-        drawDots(0)
+        pager.setCurrentItem(SCENE, false)
+        dots.visibility = View.GONE   // 화면 넘기는 번호 점은 안 보이게
         dockRow.visibility = View.INVISIBLE; dockRow.alpha = 0f
 
         Bus.onChanged(onChanged)
@@ -277,7 +279,7 @@ class HomeActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         endResize()
-        if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(0, true)
+        if (drawer.visibility == View.VISIBLE) closeDrawer() else pager.setCurrentItem(SCENE, true)
     }
 
     @Deprecated("Deprecated in Java")
@@ -286,7 +288,7 @@ class HomeActivity : Activity() {
             resize != null -> endResize()
             openFolder != null -> closeFolder()
             drawer.visibility == View.VISIBLE -> closeDrawer()
-            else -> pager.setCurrentItem(0, true)
+            else -> pager.setCurrentItem(SCENE, true)
         }
     }
 
@@ -313,6 +315,7 @@ class HomeActivity : Activity() {
     // =====================================================================
     fun refreshAll() {
         calendarW.refresh(); weatherW.refresh(); todoW.refresh(); memoW.refresh()
+        if (::timetableW.isInitialized) timetableW.refresh()
         renderGrids()
         drawDock()
         if (::search.isInitialized) appAdapter.filter(search.text.toString())
@@ -321,7 +324,7 @@ class HomeActivity : Activity() {
 
     private fun drawDots(sel: Int) {
         dots.removeAllViews()
-        for (i in 0 until HomeGrid.PAGES + SP) {
+        for (i in 0 until 3) {
             dots.addView(View(this).apply {
                 background = rounded(if (i == sel) Color.WHITE else Color.argb(110, 255, 255, 255), dpf(4f))
             }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { leftMargin = dp(4); rightMargin = dp(4) })
@@ -402,8 +405,23 @@ class HomeActivity : Activity() {
         }
     }
 
+    /** 3번 장: 위쪽 할 일 + 메모 나란히, 아래 시간표 */
+    private fun buildPage3(): View {
+        page3 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), dp(6), dp(8), dp(6)) }
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        (todoW.parent as? ViewGroup)?.removeView(todoW)
+        (memoW.parent as? ViewGroup)?.removeView(memoW)
+        top.addView(todoW, LinearLayout.LayoutParams(0, MATCH, 1f).apply { rightMargin = dp(4) })
+        top.addView(memoW, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(4) })
+        page3.addView(top, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        timetableW = TimetableCard(this)
+        page3.addView(timetableW, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
+        return page3
+    }
+
     private fun renderGrids() {
-        for (g in grids) g.setItems(HomeGrid.items(this, g.page)) { viewFor(it) }
+        // 바둑판은 달력 장(0번)만 씀. 할 일·메모는 3번 장에 직접 들어감
+        grids[0].setItems(HomeGrid.items(this, 0).filter { it.kind != "todo" && it.kind != "memo" }) { viewFor(it) }
         root.post { syncWidgetSizes() }
     }
 
@@ -836,7 +854,7 @@ class HomeActivity : Activity() {
         if (flip != null) return
         flip = Runnable {
             flip = null
-            val to = (pager.currentItem + dir).coerceIn(SP, HomeGrid.PAGES - 1 + SP)
+            val to = pager.currentItem   // 바둑판은 달력 장 하나뿐이라 넘기지 않음
             if (to != pager.currentItem) { grids.forEach { it.hideOutline() }; pager.setCurrentItem(to, true) }
         }.also { main.postDelayed(it, 600) }
     }
@@ -884,7 +902,7 @@ class HomeActivity : Activity() {
 
     private fun beginResize(page: Int, item: GridItem) {
         endResize()
-        if (pager.currentItem != page + SP) pager.setCurrentItem(page + SP, false)
+        if (pager.currentItem != 0) pager.setCurrentItem(0, false)
         val hs = (0..1).map {
             View(this).apply { background = rounded(Color.WHITE, dpf(14f), dp(3), C.accent); elevation = dpf(10f) }
                 .also { v -> overlay.addView(v, FrameLayout.LayoutParams(dp(28), dp(28))) }
@@ -995,7 +1013,7 @@ class HomeActivity : Activity() {
                         decided = true
                         grids.forEach { it.cancelLongPress2() }
                         if (drawer.visibility != View.VISIBLE) {
-                            val g: View = grids.getOrNull(gridIdx()) ?: scenePage
+                            val g: View = when (pager.currentItem) { 0 -> grids[0]; SCENE -> scenePage; else -> page3 }
                             if (dy < 0 && (startInDock || !canScrollAt(g, downX, downY, 1))) {
                                 dragMode = 1
                                 prepareDrawer()
@@ -1098,13 +1116,18 @@ class HomeActivity : Activity() {
         val bible = apps.firstOrNull { it.label.contains("성경") }?.pkg
         val camera = resolve(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
         val phone = resolve(Intent(Intent.ACTION_DIAL))
-        return listOfNotNull(bible, camera, phone, "com.nhn.android.nmap", "com.naver.whale").filter { it in have }.distinct()
+        // 다누 그림 자리 순서: 안긴 토끼, 강아지, 오리, 갈색 토끼, 아래 흰 토끼 (없는 앱은 빈자리로 둬서 순서 유지)
+        return listOf(bible, phone, "com.nhn.android.nmap", camera, "com.anthropic.claude").map { if (it != null && it in have) it else "" }
     }
 
     private fun drawDock() {
         if (apps.isEmpty()) return
         var pkgs = store.dock()
-        if (pkgs == null) { pkgs = defaultDock(); store.setDock(pkgs) }
+        if (pkgs == null || store.rawGet("dockV2") == null) {
+            // 한 번만: 그림 속 대상에 맞춰 고정줄 순서를 새로 (성경·전화·네이버 지도·카메라·Claude)
+            store.rawPut("dockV2", "1")
+            pkgs = defaultDock(); store.setDock(pkgs)
+        }
         dockRow.removeAllViews()
         for (pkg in pkgs) {
             val app = apps.firstOrNull { it.pkg == pkg } ?: continue
@@ -1208,7 +1231,7 @@ class HomeActivity : Activity() {
             .setTitle(app.label)
             .setItems(items.toTypedArray()) { _, w ->
                 when (items[w]) {
-                    "홈 화면에 추가" -> { closeDrawer(); addAppToHome(if (gridIdx() < 0) 1 else gridIdx(), app.pkg, null) }
+                    "홈 화면에 추가" -> { closeDrawer(); addAppToHome(0, app.pkg, null) }
                     "고정줄에서 빼기" -> { store.setDock(dock - app.pkg); drawDock() }
                     "고정줄에 넣기" -> {
                         if (dock.size >= 5) toast("고정줄은 5개까지예요. 하나를 먼저 빼 주세요.")

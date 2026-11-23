@@ -38,25 +38,27 @@ private const val WRAP = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
  * 그림(572×1024) 안의 위치를 그림 기준 좌표로 정해 두고, 화면 크기에 맞춰 바꿔 씀.
  */
 object SceneSpots {
-    /** 고정줄 1~5번 자리 */
+    /** 고정줄 1~5번 자리 (그림 459×1024 기준) */
     val apps = listOf(
-        RectF(150f, 465f, 290f, 640f),   // 안긴 흰 토끼
-        RectF(415f, 535f, 572f, 612f),   // 바구니
-        RectF(0f, 722f, 130f, 840f),     // 노란 오리
-        RectF(430f, 612f, 548f, 728f),   // 갈색 토끼
-        RectF(0f, 372f, 150f, 590f)      // 강아지
+        RectF(110f, 485f, 235f, 645f),   // 1 안긴 흰 토끼 → 성경
+        RectF(5f, 398f, 150f, 565f),     // 2 강아지 → 전화
+        RectF(0f, 698f, 105f, 800f),     // 3 노란 오리 → 네이버 지도
+        RectF(338f, 590f, 452f, 708f),   // 4 갈색 토끼 → 카메라
+        RectF(372f, 728f, 459f, 872f)    // 5 오른쪽 아래 흰 토끼 → Claude
     )
-    val names = listOf("안긴 흰 토끼", "바구니", "노란 오리", "갈색 토끼", "강아지")
-    val board = RectF(425f, 442f, 552f, 518f)
-    val face = RectF(212f, 318f, 378f, 465f)
-    val sky = RectF(0f, 0f, 572f, 255f)
+    val names = listOf("안긴 흰 토끼", "강아지", "노란 오리", "갈색 토끼", "아래 흰 토끼")
+    val board = RectF(335f, 450f, 445f, 512f)
+    val face = RectF(168f, 385f, 300f, 500f)
+    /** 달 자리 (누르면 날씨 앱) */
+    val moon = RectF(250f, 75f, 360f, 185f)
 
     /** 날씨 코드 + 낮/밤 → 그림 이름 */
     fun key(w: WInfo?): String {
         val c = w?.code ?: 0
         if (c in 51..67 || c in 80..82 || c in 95..99) return "rain"
         if (c in 71..77 || c == 85 || c == 86) return "snow"
-        return if (isNight(w)) "night" else "clear"
+        if (isNight(w)) return "night"
+        return if (c == 3 || c == 45 || c == 48) "cloudy" else "clear"
     }
 
     private fun isNight(w: WInfo?): Boolean {
@@ -127,11 +129,11 @@ class SceneBackground(ctx: Context) : View(ctx) {
         val b = base ?: return
         val w = width.toFloat(); val h = height.toFloat()
         if (w <= 0 || h <= 0) return
-        // 옆은 조금만 자르고(최대 8%) 모자라는 위쪽은 하늘색으로 채움 → 그림 속 대상이 화면 밖으로 안 나감
-        scale = maxOf(w / b.width, minOf(h / b.height, w / (b.width * 0.92f)))
+        // 그림(9:20)이 화면 비율과 거의 같아서 꽉 채움 (넘치는 만큼만 가운데 기준으로 잘림)
+        scale = maxOf(w / b.width, h / b.height)
         val dw = b.width * scale; val dh = b.height * scale
         left0 = (w - dw) / 2f
-        top0 = if (dh <= h) h - dh else (h - dh) / 2f
+        top0 = (h - dh) / 2f
     }
 
     /** 그림 좌표 → 이 뷰 좌표 */
@@ -144,14 +146,7 @@ class SceneBackground(ctx: Context) : View(ctx) {
         val b = base ?: run { c.drawColor(Color.rgb(30, 34, 40)); return }
         val w = width.toFloat(); val h = height.toFloat()
         val dst = RectF(left0, top0, left0 + b.width * scale, top0 + b.height * scale)
-        if (top0 > 0f) {
-            filler?.let { c.drawBitmap(it, null, RectF(0f, 0f, w, top0 + context.dpf(100f)), paint) }
-            val layer = c.saveLayer(dst, null)
-            drawImages(c, b, dst)
-            fadePaint.shader = LinearGradient(0f, top0, 0f, top0 + context.dpf(110f), Color.TRANSPARENT, Color.BLACK, Shader.TileMode.CLAMP)
-            c.drawRect(dst, fadePaint)
-            c.restoreToCount(layer)
-        } else drawImages(c, b, dst)
+        drawImages(c, b, dst)
         val sh = context.dpf(90f)
         scrimPaint.shader = LinearGradient(0f, 0f, 0f, sh, Color.argb(110, 0, 0, 0), Color.TRANSPARENT, Shader.TileMode.CLAMP)
         c.drawRect(0f, 0f, w, sh, scrimPaint)
@@ -268,7 +263,7 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
         if (SceneSpots.board.contains(ix, iy)) return "board"
         if (SceneSpots.face.contains(ix, iy)) return "face"
         SceneSpots.apps.forEachIndexed { i, r -> if (r.contains(ix, iy)) return "app$i" }
-        if (SceneSpots.sky.contains(ix, iy)) return "sky"
+        if (SceneSpots.moon.contains(ix, iy)) return "sky"
         return null
     }
 
@@ -344,7 +339,7 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
             start()
         }
         removeCallbacks(unsmile); postDelayed(unsmile, 1300)
-        hearts()
+        if (bg.key != "clear") hearts()   // 맑은 날 웃는 그림에는 하트가 이미 그려져 있음
         // 살짝 흔들림
         bg.animate().cancel()
         bg.translationY = 0f
