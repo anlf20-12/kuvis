@@ -1083,6 +1083,12 @@ class HomeActivity : Activity() {
                     AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName, try { it.loadIcon(pm) } catch (_: Exception) { null }, cat)
                 }
                 .sortedWith { a, b -> col.compare(a.label, b.label) }
+                .let { l ->
+                    // 앱 서랍에 '쿠비스 설정'이 늘 보이게 (런처 목록에 없으면 직접 넣음)
+                    if (l.any { it.pkg == packageName }) l.map { if (it.pkg == packageName) AppEntry("쿠비스 설정", packageName, it.icon, it.category) else it }
+                    else (l + AppEntry("쿠비스 설정", packageName, try { pm.getApplicationIcon(packageName) } catch (_: Exception) { null }))
+                        .sortedWith { a, b -> col.compare(a.label, b.label) }
+                }
             runOnUiThread {
                 apps = list
                 HomeGrid.prune(this, list.map { it.pkg }.toSet())
