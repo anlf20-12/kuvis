@@ -207,6 +207,8 @@ class HomeActivity : Activity() {
         refreshAll()
         Updater.checkQuietly(this)
         Hotword.sync(this)
+        wallLight = null; barsDark = null
+        if (drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
         if (Build.VERSION.SDK_INT >= 33 && Hotword.enabled(this) && !mp0().getBoolean("askedNotif", false) &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             mp0().edit().putBoolean("askedNotif", true).apply()
@@ -234,8 +236,15 @@ class HomeActivity : Activity() {
         }
         Thread {
             val w = Weather.get(this)
-            runOnUiThread { weatherW.setWeather(w) }
+            runOnUiThread { weatherW.setWeather(w); setClockWeather(w) }
         }.start()
+    }
+
+    private fun setClockWeather(w: WInfo?) {
+        if (w == null) return
+        val rain = w.days.firstOrNull()?.rain ?: 0
+        ClockWidget.weatherHint = "${w.temp.roundToInt()}°" + if (rain >= 50) " · 비 올 수 있어요" else ""
+        clockW.refresh()
     }
 
     override fun onPause() {
@@ -638,6 +647,7 @@ class HomeActivity : Activity() {
                 opts.add("홈에서 빼기")
                 if (pkg.isNotEmpty()) opts.add("앱 정보")
             }
+            "clock" -> { opts.add("시계 모양 바꾸기"); opts.add("크기 조절"); opts.add("홈에서 빼기") }
             else -> { opts.add("크기 조절"); opts.add("홈에서 빼기") }
         }
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -645,6 +655,7 @@ class HomeActivity : Activity() {
             .setItems(opts.toTypedArray()) { _, w ->
                 when (opts[w]) {
                     "크기 조절" -> beginResize(page, item)
+                    "시계 모양 바꾸기" -> clockStylePicker()
                     "위젯 설정" -> item.pkg.toIntOrNull()?.let { id ->
                         try { WidgetHost.host(this).startAppWidgetConfigureActivityForResult(this, id, 0, 63, null) }
                         catch (_: Exception) { toast("이 위젯은 설정을 다시 열 수 없어요.") }
@@ -655,6 +666,21 @@ class HomeActivity : Activity() {
                     "앱 삭제" -> safeStart(Intent(Intent.ACTION_DELETE, Uri.parse("package:${item.pkg}")))
                 }
             }.show()
+    }
+
+    /** 시계 모양 고르기: 미리보기를 보고 누르면 바로 바뀜 */
+    private fun clockStylePicker() {
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(16)) }
+        val sv = android.widget.ScrollView(this).apply { addView(list) }
+        val dlg = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("시계 모양 고르기").setView(sv).setNegativeButton("닫기", null).create()
+        val cur = clockW.currentStyle()
+        ClockWidget.NAMES.forEachIndexed { i, name ->
+            list.addView(txt((if (i == cur) "✓ " else "") + name, 14f, if (i == cur) C.accent else C.dim).apply { setPadding(dp(4), dp(12), 0, dp(6)) })
+            val prev = ClockWidget(this, i).apply { setOnClickListener { clockW.setStyle(i); dlg.dismiss() } }
+            list.addView(prev, LinearLayout.LayoutParams(MATCH, dp(104)))
+        }
+        dlg.show()
     }
 
     private fun snapshot(v: View): Bitmap? = try {
@@ -1127,6 +1153,39 @@ class HomeActivity : Activity() {
         val bar = Color.argb((Color.alpha(base) * frac).toInt(), Color.red(base), Color.green(base), Color.blue(base))
         window.statusBarColor = bar
         window.navigationBarColor = bar
+        setBarIconsDark(frac < 0.5f && wallpaperIsLight())
+    }
+
+    /** 배경화면이 밝으면 상태 표시줄 글씨(시간·배터리)를 어둡게 */
+    private var wallLight: Boolean? = null
+    private fun wallpaperIsLight(): Boolean {
+        wallLight?.let { return it }
+        val v = try {
+            if (Build.VERSION.SDK_INT >= 27) {
+                val wc = android.app.WallpaperManager.getInstance(this).getWallpaperColors(android.app.WallpaperManager.FLAG_SYSTEM)
+                wc != null && (wc.colorHints and android.app.WallpaperColors.HINT_SUPPORTS_DARK_TEXT) != 0
+            } else false
+        } catch (_: Exception) { false }
+        wallLight = v
+        return v
+    }
+
+    private var barsDark: Boolean? = null
+    private fun setBarIconsDark(dark: Boolean) {
+        if (barsDark == dark) return
+        barsDark = dark
+        if (Build.VERSION.SDK_INT >= 30) {
+            val m = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            window.insetsController?.setSystemBarsAppearance(if (dark) m else 0, m)
+        } else {
+            @Suppress("DEPRECATION")
+            var f = window.decorView.systemUiVisibility
+            @Suppress("DEPRECATION")
+            f = if (dark) f or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                else f and (View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR).inv()
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = f
+        }
     }
 
     private fun drawerTint(): Int = if (blurSupported()) Color.argb(70, 0, 0, 0) else Color.argb(215, 12, 14, 20)

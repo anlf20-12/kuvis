@@ -17,6 +17,14 @@ jobs:
         env:
           KS: ${{ secrets.KUVIS_KEYSTORE_B64 }}
         run: if [ -n "$KS" ]; then echo "$KS" | base64 -d > app/kuvis.keystore; fi
+      - name: 시계 글꼴 받기 (무료 OFL 한글 글꼴, 못 받으면 기본 글꼴로)
+        run: |
+          mkdir -p app/src/main/assets/fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl
+          for f in blackhansans/BlackHanSans-Regular.ttf dohyeon/DoHyeon-Regular.ttf gowunbatang/GowunBatang-Bold.ttf gowunbatang/GowunBatang-Regular.ttf; do
+            curl -fsSL "$B/$f" -o "app/src/main/assets/fonts/$(basename $f)" || echo "skip $f"
+          done
+          ls -la app/src/main/assets/fonts
       - run: chmod +x gradlew && ./gradlew assembleRelease --stacktrace
       - run: |
           cp app/build/outputs/apk/release/app-release.apk kuvis.apk
