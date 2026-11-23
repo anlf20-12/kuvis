@@ -15,6 +15,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Calendar
 
+private const val TT_WRAP = android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+private const val TT_MATCH = android.view.ViewGroup.LayoutParams.MATCH_PARENT
+
 /** 한 학기 시간표 (제자훈련): 오전·오후·모임 × 월~금, 칸마다 이름 하나와 '고정' 표시 */
 object Timetable {
     val DAYS = listOf("월", "화", "수", "목", "금")
@@ -87,12 +90,12 @@ class TimetableCard(private val home: HomeActivity) : LinearLayout(home) {
         val today = Timetable.today()
         // 요일 머리
         val head = LinearLayout(home).apply { orientation = HORIZONTAL }
-        head.addView(TextView(home), LayoutParams(home.dp(44), WRAP_CONTENT))
+        head.addView(TextView(home), LayoutParams(home.dp(44), TT_WRAP))
         Timetable.DAYS.forEachIndexed { c, d ->
             head.addView(home.txt(d, 13f, if (c == today) Color.rgb(250, 199, 117) else C.dim, bold = c == today, gravity = Gravity.CENTER),
-                LayoutParams(0, WRAP_CONTENT, 1f))
+                LayoutParams(0, TT_WRAP, 1f))
         }
-        addView(head, LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { bottomMargin = home.dp(4) })
+        addView(head, LayoutParams(TT_MATCH, TT_WRAP).apply { bottomMargin = home.dp(4) })
         Timetable.SLOTS.forEachIndexed { r, slot ->
             val row = LinearLayout(home).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             row.addView(home.txt(slot, 13f, C.dim, gravity = Gravity.CENTER_VERTICAL), LayoutParams(home.dp(44), home.dp(42)))
@@ -116,7 +119,7 @@ class TimetableCard(private val home: HomeActivity) : LinearLayout(home) {
                 }
                 row.addView(tv, LayoutParams(0, home.dp(42), 1f).apply { leftMargin = home.dp(3); rightMargin = home.dp(3) })
             }
-            addView(row, LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = home.dp(5) })
+            addView(row, LayoutParams(TT_MATCH, TT_WRAP).apply { topMargin = home.dp(5) })
         }
     }
 
