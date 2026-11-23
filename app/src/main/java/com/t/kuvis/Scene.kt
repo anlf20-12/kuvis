@@ -96,9 +96,11 @@ class SceneBackground(ctx: Context) : View(ctx) {
         key = k
         base = load(k)
         smile = load("smile_$k")
+        // 위쪽 빈자리: 그림 맨 윗줄 색을 가로로 부드럽게 펴서 위로 늘림 (네모난 얼룩 없이)
         filler = base?.let { b ->
-            val strip = Bitmap.createBitmap(b, 0, 0, b.width, (b.height * 0.2f).toInt())
-            Bitmap.createScaledBitmap(strip, 12, 6, true)
+            val band = Bitmap.createBitmap(b, 0, 0, b.width, (b.height * 0.03f).toInt().coerceAtLeast(2))
+            val tiny = Bitmap.createScaledBitmap(Bitmap.createScaledBitmap(band, 48, 1, true), 16, 1, true)
+            Bitmap.createScaledBitmap(tiny, 64, 1, true)
         }
         base?.let { b ->
             if (!topLight.containsKey(k)) {
@@ -115,7 +117,9 @@ class SceneBackground(ctx: Context) : View(ctx) {
     }
 
     /** 위쪽(상태 표시줄 자리)이 밝은지 — 어둡게 덮인 정도까지 셈 */
-    fun topIsLight(): Boolean = (topLight[key] ?: false) && dim < 0.3f
+    /** 상태 표시줄 뒤에는 늘 살짝 어두운 그늘을 깔고 흰 글씨를 씀 (어떤 그림이어도 시간·배터리가 보이게) */
+    fun topIsLight(): Boolean = false
+    private val scrimPaint = Paint()
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) { super.onSizeChanged(w, h, ow, oh); layoutImage() }
 
@@ -141,13 +145,16 @@ class SceneBackground(ctx: Context) : View(ctx) {
         val w = width.toFloat(); val h = height.toFloat()
         val dst = RectF(left0, top0, left0 + b.width * scale, top0 + b.height * scale)
         if (top0 > 0f) {
-            filler?.let { c.drawBitmap(it, null, RectF(0f, 0f, w, top0 + context.dpf(60f)), paint) }
+            filler?.let { c.drawBitmap(it, null, RectF(0f, 0f, w, top0 + context.dpf(100f)), paint) }
             val layer = c.saveLayer(dst, null)
             drawImages(c, b, dst)
-            fadePaint.shader = LinearGradient(0f, top0, 0f, top0 + context.dpf(56f), Color.TRANSPARENT, Color.BLACK, Shader.TileMode.CLAMP)
+            fadePaint.shader = LinearGradient(0f, top0, 0f, top0 + context.dpf(110f), Color.TRANSPARENT, Color.BLACK, Shader.TileMode.CLAMP)
             c.drawRect(dst, fadePaint)
             c.restoreToCount(layer)
         } else drawImages(c, b, dst)
+        val sh = context.dpf(90f)
+        scrimPaint.shader = LinearGradient(0f, 0f, 0f, sh, Color.argb(110, 0, 0, 0), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+        c.drawRect(0f, 0f, w, sh, scrimPaint)
         if (dim > 0f) c.drawColor(Color.argb((dim * 255).toInt(), 0, 0, 0))
     }
 
