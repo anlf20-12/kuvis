@@ -163,14 +163,9 @@ class HomeActivity : Activity() {
                 // 다누 그림 장에서는 고정줄 대신 그림 속 대상, 다른 장에서는 그림을 살짝 어둡게
                 val sceneFrac = (1f - abs(position + offset - SCENE)).coerceIn(0f, 1f)
                 sceneBg.dim = (1f - sceneFrac) * 0.38f
-                dockRow.alpha = 1f - sceneFrac
-                dockRow.visibility = if (sceneFrac > 0.98f) View.INVISIBLE else View.VISIBLE
                 if (::drawer.isInitialized && drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
             }
         })
-        mainContent.addView(txt("⌃", 16f, Color.argb(170, 255, 255, 255), gravity = Gravity.CENTER).apply {
-            setOnClickListener { openDrawer() }
-        }, LinearLayout.LayoutParams(MATCH, dp(18)))
         dockRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER
             setPadding(dp(8), dp(4), dp(8), dp(10))
@@ -203,7 +198,8 @@ class HomeActivity : Activity() {
         setContentView(outer)
         pager.setCurrentItem(SCENE, false)
         dots.visibility = View.GONE   // 화면 넘기는 번호 점은 안 보이게
-        dockRow.visibility = View.INVISIBLE; dockRow.alpha = 0f
+        // 고정줄은 어느 장에서도 안 보임 (고정 앱은 다누 그림 속 대상으로) → 모든 장이 화면 끝까지 꽉 참
+        dockRow.visibility = View.GONE
 
         Bus.onChanged(onChanged)
         Bus.onPage(onPage)
@@ -1001,8 +997,9 @@ class HomeActivity : Activity() {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.rawX; downY = ev.rawY; decided = false; dragMode = 0
                 vt?.recycle(); vt = android.view.VelocityTracker.obtain(); vt?.addMovement(ev)
-                val loc = IntArray(2); dockRow.getLocationOnScreen(loc)
-                startInDock = ev.rawY >= loc[1] - dp(40)
+                startInDock = if (dockRow.visibility == View.VISIBLE) {
+                    val loc = IntArray(2); dockRow.getLocationOnScreen(loc); ev.rawY >= loc[1] - dp(40)
+                } else false
             }
             MotionEvent.ACTION_MOVE -> {
                 vt?.addMovement(ev)
