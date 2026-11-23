@@ -95,6 +95,8 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
     private var ticker: Runnable? = null
     private var style = -1
     private var analog: AnalogFace? = null
+    // init 보다 위에 있어야 함 (init에서 refresh가 바로 씀)
+    private val fits = mutableListOf<Triple<android.widget.TextView, Pair<Float, Float>, String>>()
 
     private val cardColor = Color.argb(150, 28, 28, 32)
     private val cText = Color.parseColor("#F1EFE8")
@@ -139,7 +141,6 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         v.setAutoSizeTextTypeUniformWithConfiguration(lo, hi, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
 
     /** 글자 크기를 시계 칸 크기에 맞춰 직접 계산 (높이의 hf, 너비의 wf 안에 sample이 들어가게) */
-    private val fits = mutableListOf<Triple<android.widget.TextView, Pair<Float, Float>, String>>()
     private fun fit(v: android.widget.TextView, hf: Float, wf: Float, sample: String) {
         fits.add(Triple(v, hf to wf, sample)); v.textSize = 30f
     }
