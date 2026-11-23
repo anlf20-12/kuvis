@@ -339,7 +339,7 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
             start()
         }
         removeCallbacks(unsmile); postDelayed(unsmile, 1300)
-        if (bg.key != "clear") hearts()   // 맑은 날 웃는 그림에는 하트가 이미 그려져 있음
+        hearts()
         // 살짝 흔들림
         bg.animate().cancel()
         bg.translationY = 0f
