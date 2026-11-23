@@ -52,6 +52,8 @@ private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
 class AppEntry(val label: String, val pkg: String, val icon: Drawable?, val category: Int = -1)
 
+const val GAME_HUB = "com.samsung.android.game.gamehome"
+
 /** 쿠비스 홈 화면(런처) */
 class HomeActivity : Activity() {
 
@@ -204,6 +206,12 @@ class HomeActivity : Activity() {
         super.onResume()
         refreshAll()
         Updater.checkQuietly(this)
+        Hotword.sync(this)
+        if (Build.VERSION.SDK_INT >= 33 && Hotword.enabled(this) && !mp0().getBoolean("askedNotif", false) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            mp0().edit().putBoolean("askedNotif", true).apply()
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        }
         Backup.autoDaily(this)
         val mp = Prefs(this).p
         if (MemorySync.enabled(this) && System.currentTimeMillis() - mp.getLong("lastMemPull", 0L) > 30 * 60_000L) {
@@ -292,6 +300,8 @@ class HomeActivity : Activity() {
         }
     }
 
+    private fun mp0() = Prefs(this).p
+
     fun safeStart(i: Intent) {
         try { startActivity(i) } catch (e: Exception) {
             AlertDialog.Builder(this).setMessage("열 수 있는 앱이 없어요.").setPositiveButton("확인", null).show()
@@ -308,7 +318,7 @@ class HomeActivity : Activity() {
             Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR,
             Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS,
             Manifest.permission.ACCESS_COARSE_LOCATION
-        ).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+        ).let { if (Build.VERSION.SDK_INT >= 33) it + Manifest.permission.POST_NOTIFICATIONS else it }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (all.isNotEmpty()) requestPermissions(all.toTypedArray(), 1)
     }
 
@@ -989,7 +999,20 @@ class HomeActivity : Activity() {
         }.start()
     }
 
-    private fun visibleApps(): List<AppEntry> { val h = store.hiddenApps(); return apps.filter { it.pkg !in h } }
+    private fun visibleApps(): List<AppEntry> {
+        val h = store.hiddenApps()
+        // 게이밍 허브가 있으면 게임은 거기서만 보이게 (삼성 홈처럼)
+        val hideGames = Prefs(this).p.getBoolean("hideGames", true) && apps.any { it.pkg == GAME_HUB }
+        return apps.filter { it.pkg !in h && !(hideGames && it.pkg != GAME_HUB && isGame(it)) }
+    }
+
+    private fun isGame(a: AppEntry): Boolean {
+        if (a.category == android.content.pm.ApplicationInfo.CATEGORY_GAME) return true
+        return try {
+            @Suppress("DEPRECATION")
+            packageManager.getApplicationInfo(a.pkg, 0).flags and android.content.pm.ApplicationInfo.FLAG_IS_GAME != 0
+        } catch (_: Exception) { false }
+    }
 
     private fun defaultDock(): List<String> {
         val pm = packageManager

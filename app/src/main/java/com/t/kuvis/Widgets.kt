@@ -63,27 +63,46 @@ class WeatherWidget(home: HomeActivity) : Page(home) {
 
 }
 
-/** 시계 위젯: 칸 크기에 맞춰 글자가 줄어들고(스크롤 없음), 누르면 알람 앱 */
+/** 시계 위젯: 가는 글씨의 시간 + 작은 오전/오후 + 흐린 날짜. 칸 크기에 맞춰 글자가 줄고, 누르면 알람 앱 */
 class ClockWidget(home: HomeActivity) : LinearLayout(home) {
     init {
         orientation = VERTICAL
         gravity = Gravity.CENTER
         background = rounded(C.card, home.dpf(22f))
-        setPadding(home.dp(12), home.dp(6), home.dp(12), home.dp(6))
-        val time = TextClock(home).apply {
-            format12Hour = "a h:mm"; format24Hour = "HH:mm"
-            setTextColor(C.text); gravity = Gravity.CENTER; maxLines = 1
+        setPadding(home.dp(20), home.dp(12), home.dp(20), home.dp(12))
+        val light = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+        val row = LinearLayout(home).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER }
+        val ampm = TextClock(home).apply {
+            format12Hour = "a"; format24Hour = ""
             textLocale = Locale.KOREAN
-            setAutoSizeTextTypeUniformWithConfiguration(14, 46, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+            setTextColor(C.dim); maxLines = 1
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+            setAutoSizeTextTypeUniformWithConfiguration(9, 14, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+            gravity = Gravity.BOTTOM or Gravity.END
+            setPadding(0, 0, home.dp(6), home.dp(4))
         }
+        val time = TextClock(home).apply {
+            format12Hour = "h:mm"; format24Hour = "HH:mm"
+            textLocale = Locale.KOREAN
+            setTextColor(C.text); maxLines = 1
+            typeface = light
+            letterSpacing = 0.02f
+            includeFontPadding = false
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            setAutoSizeTextTypeUniformWithConfiguration(14, 34, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        row.addView(ampm, LayoutParams(0, MATCH, 1f))
+        row.addView(time, LayoutParams(0, MATCH, 2.2f))
+        row.addView(android.view.View(home), LayoutParams(0, 1, 0.6f))
         val date = TextClock(home).apply {
             format12Hour = "M월 d일 EEEE"; format24Hour = "M월 d일 EEEE"
-            setTextColor(C.dim); gravity = Gravity.CENTER; maxLines = 1
             textLocale = Locale.KOREAN
-            setAutoSizeTextTypeUniformWithConfiguration(9, 15, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
+            setTextColor(C.dim); gravity = Gravity.CENTER; maxLines = 1
+            letterSpacing = 0.03f
+            setAutoSizeTextTypeUniformWithConfiguration(8, 13, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
         }
-        addView(time, LayoutParams(MATCH, 0, 3f))
-        addView(date, LayoutParams(MATCH, 0, 1.2f))
+        addView(row, LayoutParams(MATCH, 0, 2.6f))
+        addView(date, LayoutParams(MATCH, 0, 1f).apply { topMargin = home.dp(2) })
         setOnClickListener {
             home.safeStart(Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }

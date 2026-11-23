@@ -29,6 +29,7 @@ class AssistActivity : Activity(), KuvisCore.Listener {
             Gravity.BOTTOM).apply { setMargins(dp(8), 0, dp(8), dp(8)) })
         setContentView(root)
 
+        HotwordService.pause() // 말로 부르기 듣기는 잠깐 멈추고 마이크를 대화에 씀
         core = KuvisCore(this, panel, this)
         core.startSoon()
     }
@@ -62,6 +63,7 @@ class AssistActivity : Activity(), KuvisCore.Listener {
         main.removeCallbacks(autoClose)
         core.destroy()
         KuvisSession.current?.let { try { it.hide() } catch (_: Exception) {} }
+        HotwordService.resume()
     }
 
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, results: IntArray) {

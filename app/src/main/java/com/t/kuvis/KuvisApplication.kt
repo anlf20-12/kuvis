@@ -23,6 +23,7 @@ class KuvisApplication : Application() {
             } catch (_: Exception) {}
             prev?.uncaughtException(t, e)
         }
+        Hotword.watch(this)
     }
 }
 

@@ -405,6 +405,11 @@ class SettingsActivity : Activity() {
     // =====================================================================
     // 3. 목소리
     private fun buildVoice(c: LinearLayout) {
+        c.addView(switchRow("충전 중에 \"쿠비스\"라고 부르면 대답하기", prefs.p.getBoolean("wakeOnCharge", true)) { v ->
+            prefs.p.edit().putBoolean("wakeOnCharge", v).apply()
+            if (!v) stopService(Intent(this, HotwordService::class.java))
+        })
+        c.addView(txt("충전기를 꽂아 두었을 때만 들어요. 빼면 바로 꺼져요. 쿠비스를 '디지털 어시스턴트 앱'으로 정해 두면 화면이 꺼져 있어도 잘 떠요.", 12f, C.dim).apply { setPadding(0, 0, 0, dp(10)) })
         c.addView(label("음성 엔진 (휴대폰에 설치된 무료 엔진)"))
         val engineSpinner = Spinner(this)
         c.addView(engineSpinner)
@@ -694,6 +699,9 @@ class SettingsActivity : Activity() {
     // 6. 기타
     private fun buildEtc(c: LinearLayout) {
         val store = Store(this)
+        c.addView(switchRow("게이밍 허브가 있으면 게임 앱은 앱 서랍에서 숨기기", prefs.p.getBoolean("hideGames", true)) { v ->
+            prefs.p.edit().putBoolean("hideGames", v).apply(); Bus.changed()
+        })
         c.addView(button("할 일·메모 백업 내보내기") {
             startSafe(Intent.createChooser(
                 Intent(Intent.ACTION_SEND).setType("text/plain")

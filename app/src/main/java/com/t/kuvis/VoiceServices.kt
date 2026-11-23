@@ -17,7 +17,11 @@ import android.speech.SpeechRecognizer
  * 쿠비스를 '디지털 어시스턴트 앱'으로 고를 수 있게 하는 부분.
  * 측면 버튼 길게 누르기 → 이 세션이 열림 → AssistActivity(대화 창)를 띄움.
  */
-class KuvisVoiceService : VoiceInteractionService()
+class KuvisVoiceService : VoiceInteractionService() {
+    companion object { @Volatile var instance: KuvisVoiceService? = null }
+    override fun onReady() { super.onReady(); instance = this }
+    override fun onShutdown() { if (instance === this) instance = null; super.onShutdown() }
+}
 
 class KuvisSessionService : VoiceInteractionSessionService() {
     override fun onNewSession(args: Bundle?): VoiceInteractionSession = KuvisSession(this)

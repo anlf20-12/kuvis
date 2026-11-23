@@ -4,6 +4,9 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -113,6 +116,12 @@
         </activity>
 
         <!-- 디지털 어시스턴트 등록 -->
+        <!-- 충전 중 "쿠비스" 말로 부르기 -->
+        <service
+            android:name=".HotwordService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <service
             android:name=".KuvisVoiceService"
             android:exported="true"
