@@ -96,11 +96,11 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
     private var analog: AnalogFace? = null
 
     private val cardColor = Color.argb(150, 28, 28, 32)
-    private val text = Color.parseColor("#F1EFE8")
-    private val sub = Color.parseColor("#B4B2A9")
-    private val faint = Color.parseColor("#888780")
-    private val warm = Color.parseColor("#FAC775")
-    private val coral = Color.parseColor("#F0997B")
+    private val cText = Color.parseColor("#F1EFE8")
+    private val cSub = Color.parseColor("#B4B2A9")
+    private val cFaint = Color.parseColor("#888780")
+    private val cWarm = Color.parseColor("#FAC775")
+    private val cCoral = Color.parseColor("#F0997B")
 
     init {
         background = rounded(cardColor, home.dpf(22f))
@@ -145,11 +145,11 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         pad(18, 10)
         val col = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        row.addView(tc("a", "").apply { setTextColor(sub); textSize = 14f; setPadding(0, 0, home.dp(6), home.dp(6)) },
+        row.addView(tc("a", "").apply { setTextColor(cSub); textSize = 14f; setPadding(0, 0, home.dp(6), home.dp(6)) },
             LinearLayout.LayoutParams(WRAP, WRAP).apply { gravity = Gravity.BOTTOM })
-        row.addView(tc("h:mm", "HH:mm").apply { setTextColor(text); textSize = 40f; letterSpacing = 0.03f })
+        row.addView(tc("h:mm", "HH:mm").apply { setTextColor(cText); textSize = 40f; letterSpacing = 0.03f })
         col.addView(row)
-        col.addView(tc("M월 d일 EEEE").apply { setTextColor(sub); textSize = 13f; gravity = Gravity.CENTER; setPadding(0, home.dp(4), 0, 0) })
+        col.addView(tc("M월 d일 EEEE").apply { setTextColor(cSub); textSize = 13f; gravity = Gravity.CENTER; setPadding(0, home.dp(4), 0, 0) })
         addView(col, LayoutParams(MATCH, MATCH))
     }
 
@@ -160,13 +160,13 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         val dh = ClockFonts.get(home, "DoHyeon-Regular.ttf", android.graphics.Typeface.DEFAULT)
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         val nums = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
-        nums.addView(tc("hh", "HH").apply { typeface = bh; setTextColor(text); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
-        nums.addView(tc("mm").apply { typeface = bh; setTextColor(text); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
+        nums.addView(tc("hh", "HH").apply { typeface = bh; setTextColor(cText); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
+        nums.addView(tc("mm").apply { typeface = bh; setTextColor(cText); auto(this, 16, 56); gravity = Gravity.CENTER }, LinearLayout.LayoutParams(WRAP, 0, 1f))
         row.addView(nums, LinearLayout.LayoutParams(WRAP, MATCH))
         val side = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(home.dp(16), 0, 0, 0) }
-        side.addView(tc("a", "").apply { typeface = dh; setTextColor(sub); textSize = 17f })
-        side.addView(tc("M.d").apply { typeface = dh; setTextColor(sub); textSize = 17f })
-        side.addView(tc("EEEE").apply { typeface = dh; setTextColor(coral); textSize = 17f })
+        side.addView(tc("a", "").apply { typeface = dh; setTextColor(cSub); textSize = 17f })
+        side.addView(tc("M.d").apply { typeface = dh; setTextColor(cSub); textSize = 17f })
+        side.addView(tc("EEEE").apply { typeface = dh; setTextColor(cCoral); textSize = 17f })
         row.addView(side, LinearLayout.LayoutParams(WRAP, WRAP))
         addView(row, LayoutParams(MATCH, MATCH))
     }
@@ -175,17 +175,17 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
     private fun buildNewspaper() {
         pad(22, 10)
         val gb = ClockFonts.get(home, "GowunBatang-Bold.ttf", android.graphics.Typeface.create(android.graphics.Typeface.SERIF, android.graphics.Typeface.BOLD))
-        val gr = ClockFonts.get(home, "GowunBatang-Regular.ttf", android.graphics.Typeface.SERIF)
+        val gr = ClockFonts.get(home, "GowunBatang-Bold.ttf", android.graphics.Typeface.SERIF)
         val col = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
         val top = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
-        top.addView(tc("yyyy년 M월 d일").apply { typeface = gr; setTextColor(sub); textSize = 12f }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        top.addView(tc("EEEE").apply { typeface = gr; setTextColor(sub); textSize = 12f })
+        top.addView(tc("yyyy년 M월 d일").apply { typeface = gr; setTextColor(cSub); textSize = 12f }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        top.addView(tc("EEEE").apply { typeface = gr; setTextColor(cSub); textSize = 12f })
         col.addView(top, LinearLayout.LayoutParams(MATCH, WRAP))
-        col.addView(android.view.View(home).apply { setBackgroundColor(faint) }, LinearLayout.LayoutParams(MATCH, home.dp(1)).apply { topMargin = home.dp(4) })
+        col.addView(android.view.View(home).apply { setBackgroundColor(cFaint) }, LinearLayout.LayoutParams(MATCH, home.dp(1)).apply { topMargin = home.dp(4) })
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        row.addView(tc("h:mm", "HH:mm").apply { typeface = gb; setTextColor(text); auto(this, 16, 42); letterSpacing = 0.06f; gravity = Gravity.CENTER },
+        row.addView(tc("h:mm", "HH:mm").apply { typeface = gb; setTextColor(cText); auto(this, 16, 42); letterSpacing = 0.06f; gravity = Gravity.CENTER },
             LinearLayout.LayoutParams(WRAP, MATCH))
-        row.addView(tc("a", "").apply { typeface = gr; setTextColor(sub); textSize = 14f; setPadding(home.dp(6), 0, 0, home.dp(6)) },
+        row.addView(tc("a", "").apply { typeface = gr; setTextColor(cSub); textSize = 14f; setPadding(home.dp(6), 0, 0, home.dp(6)) },
             LinearLayout.LayoutParams(WRAP, WRAP).apply { gravity = Gravity.BOTTOM })
         col.addView(row, LinearLayout.LayoutParams(MATCH, 0, 1f))
         addView(col, LayoutParams(MATCH, MATCH))
@@ -199,9 +199,9 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         pad(22, 8)
         val dh = ClockFonts.get(home, "DoHyeon-Regular.ttf", android.graphics.Typeface.DEFAULT)
         val col = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-        korLine1 = home.txt("", 22f, text).apply { typeface = dh; maxLines = 1; auto(this, 12, 24) }
-        korLine2 = home.txt("", 26f, warm).apply { typeface = dh; maxLines = 1; auto(this, 12, 28) }
-        korLine3 = home.txt("", 13f, faint).apply { typeface = dh; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        korLine1 = home.txt("", 22f, cText).apply { typeface = dh; maxLines = 1; auto(this, 12, 24) }
+        korLine2 = home.txt("", 26f, cWarm).apply { typeface = dh; maxLines = 1; auto(this, 12, 28) }
+        korLine3 = home.txt("", 13f, cFaint).apply { typeface = dh; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         col.addView(korLine1, LinearLayout.LayoutParams(MATCH, 0, 1f))
         col.addView(korLine2, LinearLayout.LayoutParams(MATCH, 0, 1.2f))
         col.addView(korLine3, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -214,11 +214,11 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
         pad(18, 6)
         val dh = ClockFonts.get(home, "DoHyeon-Regular.ttf", android.graphics.Typeface.DEFAULT_BOLD)
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        row.addView(tc("h:mm", "HH:mm").apply { typeface = dh; setTextColor(text); auto(this, 16, 60); gravity = Gravity.CENTER_VERTICAL or Gravity.END },
+        row.addView(tc("h:mm", "HH:mm").apply { typeface = dh; setTextColor(cText); auto(this, 16, 60); gravity = Gravity.CENTER_VERTICAL or Gravity.END },
             LinearLayout.LayoutParams(0, MATCH, 1.4f))
         val side = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(home.dp(12), 0, 0, 0) }
-        side.addView(tc("a", "").apply { typeface = dh; setTextColor(warm); textSize = 16f })
-        side.addView(tc("M월 d일 E").apply { typeface = dh; setTextColor(sub); textSize = 14f })
+        side.addView(tc("a", "").apply { typeface = dh; setTextColor(cWarm); textSize = 16f })
+        side.addView(tc("M월 d일 E").apply { typeface = dh; setTextColor(cSub); textSize = 14f })
         row.addView(side, LinearLayout.LayoutParams(0, WRAP, 1f))
         addView(row, LayoutParams(MATCH, MATCH))
     }
@@ -227,13 +227,13 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
     private fun buildAnalog() {
         pad(16, 8)
         val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        val face = AnalogFace(home, text, sub, warm)
+        val face = AnalogFace(home, cText, cSub, cWarm)
         analog = face
         row.addView(face, LinearLayout.LayoutParams(0, MATCH, 1f))
         val side = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(home.dp(10), 0, 0, 0) }
-        side.addView(tc("EEEE").apply { setTextColor(text); textSize = 18f })
-        side.addView(tc("M월 d일").apply { setTextColor(sub); textSize = 14f })
-        side.addView(tc("a h:mm", "HH:mm").apply { setTextColor(faint); textSize = 13f })
+        side.addView(tc("EEEE").apply { setTextColor(cText); textSize = 18f })
+        side.addView(tc("M월 d일").apply { setTextColor(cSub); textSize = 14f })
+        side.addView(tc("a h:mm", "HH:mm").apply { setTextColor(cFaint); textSize = 13f })
         row.addView(side, LinearLayout.LayoutParams(0, WRAP, 1.2f))
         addView(row, LayoutParams(MATCH, MATCH))
         startTicker(1_000)
@@ -251,7 +251,7 @@ class ClockWidget(private val home: HomeActivity, private val fixedStyle: Int = 
             3 -> if (::korLine1.isInitialized) {
                 val h = now.hour
                 korLine1.text = android.text.SpannableString("지금은 ${if (h < 12) "오전" else "오후"}").apply {
-                    setSpan(android.text.style.ForegroundColorSpan(faint), 0, 3, 0)
+                    setSpan(android.text.style.ForegroundColorSpan(cFaint), 0, 3, 0)
                 }
                 korLine2.text = "${HOURS[h % 12]} 시 ${koreanMinute(now.minute)}"
                 val d = now.format(DateTimeFormatter.ofPattern("M월 d일 EEEE", Locale.KOREAN))

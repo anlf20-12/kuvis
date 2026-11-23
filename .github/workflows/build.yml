@@ -21,7 +21,7 @@ jobs:
         run: |
           mkdir -p app/src/main/assets/fonts
           B=https://raw.githubusercontent.com/google/fonts/main/ofl
-          for f in blackhansans/BlackHanSans-Regular.ttf dohyeon/DoHyeon-Regular.ttf gowunbatang/GowunBatang-Bold.ttf gowunbatang/GowunBatang-Regular.ttf; do
+          for f in blackhansans/BlackHanSans-Regular.ttf dohyeon/DoHyeon-Regular.ttf gowunbatang/GowunBatang-Bold.ttf; do
             curl -fsSL "$B/$f" -o "app/src/main/assets/fonts/$(basename $f)" || echo "skip $f"
           done
           ls -la app/src/main/assets/fonts
