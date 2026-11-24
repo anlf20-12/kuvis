@@ -68,7 +68,8 @@ class CalendarPage(home: HomeActivity) : Page(home) {
 
     private data class Ev(
         val id: Long, val title: String, val begin: Long, val end: Long,
-        val allDay: Boolean, val location: String?, val color: Int
+        val allDay: Boolean, val location: String?, val color: Int,
+        val holiday: Boolean = false, val recurring: Boolean = false
     ) {
         val zone: ZoneId get() = if (allDay) ZoneOffset.UTC else ZoneId.systemDefault()
         val startDate: LocalDate get() = Instant.ofEpochMilli(begin).atZone(zone).toLocalDate()
@@ -79,6 +80,10 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         }
     }
 
+    // 차분한 색 (T가 고른 ②번)
+    private val HOLIDAY_COLOR = Color.rgb(64, 128, 86)
+    private val REPEAT_COLOR = Color.rgb(70, 104, 150)
+    private val ONCE_COLOR = Color.rgb(156, 104, 80)
     private var ym: YearMonth = YearMonth.now()
     private var selected: LocalDate = LocalDate.now()
     private var events: List<Ev> = emptyList()
@@ -113,7 +118,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         // 요일
         val week = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, home.dp(10), 0, home.dp(4)) }
         listOf("일", "월", "화", "수", "목", "금", "토").forEachIndexed { i, d ->
-            week.addView(home.txt(d, 13f, when (i) { 0 -> C.sun; 6 -> C.sat; else -> C.dim }, gravity = Gravity.CENTER),
+            week.addView(home.txt(d, 14f, when (i) { 0 -> C.sun; 6 -> C.sat; else -> C.dim }, gravity = Gravity.CENTER),
                 LinearLayout.LayoutParams(0, WRAP, 1f))
         }
         c.addView(week)
@@ -123,7 +128,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         val gridStart = first.minusDays((first.dayOfWeek.value % 7).toLong())
         events = loadEvents(gridStart, gridStart.plusDays(42))
         val today = LocalDate.now()
-        for (w in 0 until 6) c.addView(weekRow(gridStart.plusDays((w * 7).toLong()), today), LinearLayout.LayoutParams(MATCH, home.dp(74)))
+        for (w in 0 until 6) c.addView(weekRow(gridStart.plusDays((w * 7).toLong()), today), LinearLayout.LayoutParams(MATCH, home.dp(86)))
 
         // 고른 날 일정
         val list = card()
@@ -180,7 +185,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                 else -> for (c in sg.from..sg.to) hidden[c]++
             }
         }
-        val bars = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; setPadding(0, home.dp(25), 0, 0) }
+        val bars = LinearLayout(home).apply { orientation = LinearLayout.VERTICAL; setPadding(0, home.dp(28), 0, 0) }
         for (l in lanes) {
             val row = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
             var col = 0
@@ -189,7 +194,8 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                 val contL = sg.e.startDate.isBefore(d0); val contR = sg.e.endDate.isAfter(d6)
                 val r = home.dpf(3f)
                 row.addView(TextView(home).apply {
-                    text = sg.e.title; textSize = 9.5f; setTextColor(Color.WHITE)
+                    text = sg.e.title; textSize = 11.5f; setTextColor(Color.WHITE)
+                    includeFontPadding = false
                     maxLines = 1; ellipsize = TextUtils.TruncateAt.END
                     setPadding(home.dp(3), 0, home.dp(2), 0)
                     // 여러 날 이어지는 일정은 이름을 막대 가운데에
@@ -199,7 +205,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                         cornerRadii = floatArrayOf(if (contL) 0f else r, if (contL) 0f else r, if (contR) 0f else r, if (contR) 0f else r,
                             if (contR) 0f else r, if (contR) 0f else r, if (contL) 0f else r, if (contL) 0f else r)
                     }
-                }, LinearLayout.LayoutParams(0, home.dp(14), (sg.to - sg.from + 1).toFloat()).apply {
+                }, LinearLayout.LayoutParams(0, home.dp(17), (sg.to - sg.from + 1).toFloat()).apply {
                     leftMargin = if (contL) 0 else home.dp(1); rightMargin = if (contR) 0 else home.dp(1)
                 })
                 col = sg.to + 1
@@ -209,7 +215,7 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         }
         if (hidden.any { it > 0 }) {
             val more = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL }
-            for (c in 0 until 7) more.addView(home.txt(if (hidden[c] > 0) "+${hidden[c]}" else "", 9f, C.dim, gravity = Gravity.CENTER),
+            for (c in 0 until 7) more.addView(home.txt(if (hidden[c] > 0) "+${hidden[c]}" else "", 11f, C.dim, gravity = Gravity.CENTER),
                 LinearLayout.LayoutParams(0, WRAP, 1f))
             bars.addView(more)
         }
@@ -230,13 +236,13 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         }
         val inMonth = YearMonth.from(date) == ym
         val base = when (dow) { 0 -> C.sun; 6 -> C.sat; else -> C.text }
-        val num = home.txt(date.dayOfMonth.toString(), 13f, if (inMonth) base else Color.argb(90, 255, 255, 255), gravity = Gravity.CENTER)
+        val num = home.txt(date.dayOfMonth.toString(), 15f, if (inMonth) base else Color.argb(90, 255, 255, 255), gravity = Gravity.CENTER)
         if (date == today) {
             num.setTextColor(Color.WHITE)
-            num.background = rounded(C.err, home.dpf(11f))
+            num.background = rounded(C.err, home.dpf(13f))
         }
         val numWrap = FrameLayout(home)
-        numWrap.addView(num, FrameLayout.LayoutParams(home.dp(22), home.dp(22), Gravity.CENTER_HORIZONTAL))
+        numWrap.addView(num, FrameLayout.LayoutParams(home.dp(26), home.dp(26), Gravity.CENTER_HORIZONTAL))
         cell.addView(numWrap)
         return cell
     }
@@ -250,20 +256,34 @@ class CalendarPage(home: HomeActivity) : Page(home) {
             CalendarContract.Instances.EVENT_ID, CalendarContract.Instances.TITLE,
             CalendarContract.Instances.BEGIN, CalendarContract.Instances.END,
             CalendarContract.Instances.ALL_DAY, CalendarContract.Instances.EVENT_LOCATION,
-            CalendarContract.Instances.DISPLAY_COLOR
+            CalendarContract.Instances.DISPLAY_COLOR, CalendarContract.Instances.RRULE,
+            CalendarContract.Instances.ORIGINAL_ID, CalendarContract.Instances.CALENDAR_DISPLAY_NAME
         )
         val out = mutableListOf<Ev>()
         try {
             CalendarContract.Instances.query(home.contentResolver, proj, begin, end)?.use { c ->
                 while (c.moveToNext()) {
                     val color = if (c.isNull(6)) C.chip else (c.getInt(6) or 0xFF000000.toInt())
+                    val cal = c.getString(9) ?: ""
+                    val holiday = cal.contains("휴일") || cal.contains("공휴일") || cal.contains("Holiday", true)
+                    val rep = !c.getString(7).isNullOrBlank() || !c.isNull(8)
                     out.add(Ev(c.getLong(0), c.getString(1) ?: "(제목 없음)", c.getLong(2), c.getLong(3),
-                        c.getInt(4) == 1, c.getString(5)?.takeIf { it.isNotBlank() }, color))
+                        c.getInt(4) == 1, c.getString(5)?.takeIf { it.isNotBlank() }, color, holiday, rep))
                 }
             }
         } catch (_: Exception) {}
         // 삼성 '공휴일'과 구글 '대한민국의 휴일'처럼 같은 날 같은 이름은 하나만
-        return out.distinctBy { Triple(it.title.replace(" ", ""), it.startDate, if (it.allDay) -1L else it.begin) }
+        val uniq = out.distinctBy { Triple(it.title.replace(" ", ""), it.startDate, if (it.allDay) -1L else it.begin) }
+        // 색은 알아서: 공휴일은 차분한 녹색, 반복 일정은 파랑, 한 번뿐인 일정은 갈색.
+        // 반복 규칙이 없어도(옮겨 온 일정 등) 같은 이름이 6주 안에 3번 넘게 나오면 반복으로 봄
+        val count = uniq.filter { !it.holiday }.groupingBy { it.title.trim() }.eachCount()
+        return uniq.map {
+            when {
+                it.holiday -> it.copy(color = HOLIDAY_COLOR)
+                it.recurring || (count[it.title.trim()] ?: 0) >= 3 -> it.copy(color = REPEAT_COLOR, recurring = true)
+                else -> it.copy(color = ONCE_COLOR)
+            }
+        }
     }
 
     private fun addEvent() {
