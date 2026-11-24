@@ -96,7 +96,9 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         // 머리줄
         val head = LinearLayout(home).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         head.addView(iconBtn("‹") { ym = ym.minusMonths(1); refresh() })
-        head.addView(home.txt("${ym.year}년 ${ym.monthValue}월", 20f, C.text, bold = true))
+        head.addView(home.txt("${ym.year}년 ${ym.monthValue}월", 20f, C.text, bold = true).apply {
+            setOnLongClickListener { showHidden(); true }
+        })
         head.addView(iconBtn("›") { ym = ym.plusMonths(1); refresh() })
         head.addView(View(home), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(home.txt("오늘", 15f, C.text).apply {
@@ -148,6 +150,8 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                 setOnClickListener {
                     home.safeStart(Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id)))
                 }
+                // 꾹 누르면 쿠비스 달력에서 숨기기 (공휴일처럼 캘린더 앱에서 못 지우는 것도)
+                setOnLongClickListener { askHide(e); true }
             }
             row.addView(View(home).apply { background = rounded(e.color, home.dpf(2f)) },
                 LinearLayout.LayoutParams(home.dp(4), MATCH).apply { rightMargin = home.dp(10) })
@@ -261,7 +265,10 @@ class CalendarPage(home: HomeActivity) : Page(home) {
         )
         val out = mutableListOf<Ev>()
         try {
-            CalendarContract.Instances.query(home.contentResolver, proj, begin, end)?.use { c ->
+            // 캘린더 앱에서 '숨긴' 캘린더(VISIBLE=0)는 쿠비스 달력에도 안 보이게
+            val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+                .appendPath(begin.toString()).appendPath(end.toString()).build()
+            home.contentResolver.query(uri, proj, "${CalendarContract.Instances.VISIBLE}=1", null, null)?.use { c ->
                 while (c.moveToNext()) {
                     val color = if (c.isNull(6)) C.chip else (c.getInt(6) or 0xFF000000.toInt())
                     val cal = c.getString(9) ?: ""
@@ -273,7 +280,8 @@ class CalendarPage(home: HomeActivity) : Page(home) {
             }
         } catch (_: Exception) {}
         // 삼성 '공휴일'과 구글 '대한민국의 휴일'처럼 같은 날 같은 이름은 하나만
-        val uniq = out.distinctBy { Triple(it.title.replace(" ", ""), it.startDate, if (it.allDay) -1L else it.begin) }
+        val hiddenTitles = hiddenTitles()
+        val uniq = out.filter { it.title.replace(" ", "") !in hiddenTitles }.distinctBy { Triple(it.title.replace(" ", ""), it.startDate, if (it.allDay) -1L else it.begin) }
         // 색은 알아서: 공휴일은 차분한 녹색, 반복 일정은 파랑, 한 번뿐인 일정은 갈색.
         // 반복 규칙이 없어도(옮겨 온 일정 등) 같은 이름이 6주 안에 3번 넘게 나오면 반복으로 봄
         val count = uniq.filter { !it.holiday }.groupingBy { it.title.trim() }.eachCount()
@@ -284,6 +292,27 @@ class CalendarPage(home: HomeActivity) : Page(home) {
                 else -> it.copy(color = ONCE_COLOR)
             }
         }
+    }
+
+    /** 쿠비스 달력에서만 숨긴 일정 이름 (휴대폰 캘린더에는 그대로 있음) */
+    private fun hiddenTitles(): Set<String> = Prefs(home).p.getStringSet("calHidden", emptySet()) ?: emptySet()
+    private fun setHiddenTitles(s: Set<String>) = Prefs(home).p.edit().putStringSet("calHidden", HashSet(s)).apply()
+
+    private fun askHide(e: Ev) {
+        AlertDialog.Builder(home, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("'${e.title}' 숨기기")
+            .setMessage("쿠비스 달력에서 이 이름의 일정을 모두 안 보이게 해요. 휴대폰 캘린더에서는 지워지지 않아요.\n다시 보이게 하려면 달력 위 '년 월' 글씨를 꾹 누르세요.")
+            .setPositiveButton("숨기기") { _, _ -> setHiddenTitles(hiddenTitles() + e.title.replace(" ", "")); refresh() }
+            .setNegativeButton("취소", null).show()
+    }
+
+    private fun showHidden() {
+        val list = hiddenTitles().sorted()
+        if (list.isEmpty()) { android.widget.Toast.makeText(home, "숨긴 일정이 없어요", android.widget.Toast.LENGTH_SHORT).show(); return }
+        AlertDialog.Builder(home, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("숨긴 일정 — 누르면 다시 보여요")
+            .setItems(list.toTypedArray()) { _, i -> setHiddenTitles(hiddenTitles() - list[i]); refresh() }
+            .setNegativeButton("닫기", null).show()
     }
 
     private fun addEvent() {
