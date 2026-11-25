@@ -1170,6 +1170,24 @@ class HomeActivity : Activity() {
             }.show()
     }
 
+    /** 고정줄 말고 그림 속 다른 자리(집 등)에 붙은 앱. 처음엔 집 = 웨일 */
+    fun sceneExtraApp(key: String): String? {
+        val def = if (key == "house") "com.naver.whale" else ""
+        val p = Prefs(this).p.getString("scene_$key", def) ?: def
+        return p.takeIf { q -> q.isNotEmpty() && apps.any { it.pkg == q } }
+    }
+
+    fun pickSceneExtra(key: String, name: String) {
+        if (apps.isEmpty()) return
+        val list = apps.sortedWith(compareBy(Collator.getInstance(Locale.KOREAN)) { it.label })
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("${name}을 누르면 열 앱")
+            .setItems(list.map { it.label }.toTypedArray()) { _, k ->
+                Prefs(this).p.edit().putString("scene_$key", list[k].pkg).apply()
+                toast("$name → ${list[k].label}")
+            }.show()
+    }
+
     private val sceneTick = object : Runnable {
         override fun run() { updateScene(); main.postDelayed(this, 60_000) }
     }

@@ -49,6 +49,8 @@ object SceneSpots {
     val names = listOf("안긴 흰 토끼", "강아지", "노란 오리", "갈색 토끼", "아래 흰 토끼")
     val board = RectF(335f, 450f, 445f, 512f)
     val face = RectF(168f, 385f, 300f, 500f)
+    /** 뒤쪽 집 (누르면 웨일, 꾹 눌러 바꾸기) */
+    val house = RectF(285f, 262f, 425f, 368f)
     /** 달 자리 (누르면 날씨 앱) */
     val moon = RectF(250f, 75f, 360f, 185f)
 
@@ -266,6 +268,7 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
         if (SceneSpots.face.contains(ix, iy)) return "face"
         SceneSpots.apps.forEachIndexed { i, r -> if (r.contains(ix, iy)) return "app$i" }
         if (SceneSpots.moon.contains(ix, iy)) return "sky"
+        if (SceneSpots.house.contains(ix, iy)) return "house"
         return null
     }
 
@@ -295,6 +298,13 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
             h == "face" -> { SceneSounds.pop(home); performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); smileNow() }
             h == "board" -> { SceneSounds.tok(home); ripple(SceneSpots.board); ClockMenu.show(home) }
             h == "sky" -> { SceneSounds.tok(home); performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY); WeatherApp.open(home) }
+            h == "house" -> {
+                SceneSounds.tok(home)
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                ripple(SceneSpots.house)
+                val pkg = home.sceneExtraApp("house")
+                if (pkg == null) home.pickSceneExtra("house", "집") else postDelayed({ home.launch(pkg) }, 140)
+            }
             h.startsWith("app") -> {
                 val i = h.removePrefix("app").toInt()
                 SceneSounds.tok(home)
@@ -310,6 +320,7 @@ class ScenePage(private val home: HomeActivity, private val bg: SceneBackground)
         val h = hit(x, y) ?: return
         performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (h.startsWith("app")) home.pickSceneApp(h.removePrefix("app").toInt())
+        if (h == "house") home.pickSceneExtra("house", "집")
     }
 
     /** 누른 대상이 살짝 커지는 느낌 (부드러운 빛 번짐) */
