@@ -28,8 +28,9 @@ import android.speech.SpeechRecognizer
  * 충전기·이어폰을 빼면 바로 멈춘다. 듣는 동안엔 알림창에 '듣는 중'이 보인다.
  */
 object Hotword {
-    fun enabled(ctx: Context) = Prefs(ctx).p.getBoolean("wakeOnCharge", true)
-    fun earEnabled(ctx: Context) = Prefs(ctx).p.getBoolean("wakeOnEarphone", true)
+    // "쿠비스"라고 부르기는 T 요청으로 뺌 (2026-11-25) — 버튼으로만 부름. 켜져 있던 듣기는 sync에서 꺼짐
+    fun enabled(ctx: Context) = false
+    fun earEnabled(ctx: Context) = false
 
     /** 유선·블루투스·USB 이어폰이 연결돼 있나 */
     fun earphones(ctx: Context): Boolean {

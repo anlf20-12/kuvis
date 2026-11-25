@@ -403,15 +403,6 @@ class SettingsActivity : Activity() {
     // =====================================================================
     // 3. 목소리
     private fun buildVoice(c: LinearLayout) {
-        c.addView(switchRow("충전 중에 \"쿠비스\"라고 부르면 대답하기", prefs.p.getBoolean("wakeOnCharge", true)) { v ->
-            prefs.p.edit().putBoolean("wakeOnCharge", v).apply()
-            Hotword.sync(this)
-        })
-        c.addView(switchRow("이어폰을 쓰는 중에 \"쿠비스\"라고 부르면 대답하기", prefs.p.getBoolean("wakeOnEarphone", true)) { v ->
-            prefs.p.edit().putBoolean("wakeOnEarphone", v).apply()
-            Hotword.sync(this)
-        })
-        c.addView(txt("충전기나 이어폰(유선·블루투스)이 연결돼 있을 때만 들어요. 빼면 바로 꺼져요. 쿠비스를 '디지털 어시스턴트 앱'으로 정해 두면 화면이 꺼져 있어도 잘 떠요.", 12f, C.dim).apply { setPadding(0, 0, 0, dp(10)) })
         c.addView(label("음성 엔진 (휴대폰에 설치된 무료 엔진)"))
         val engineSpinner = Spinner(this)
         c.addView(engineSpinner)
