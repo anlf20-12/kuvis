@@ -471,7 +471,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (halted) goIdle() else {
             setState("listening")
             main.postDelayed({
-                if (!halted && state == "listening" && !askingPermission && recognizerIdle()) { Earcon.ready(act); muteBeep(true); startListening(); main.postDelayed({ muteBeep(false) }, 700) }
+                if (!halted && state == "listening" && !askingPermission && recognizerIdle()) { muteBeep(true); startListening(); main.postDelayed({ muteBeep(false) }, 700) }
             }, 450)
         }
     }
