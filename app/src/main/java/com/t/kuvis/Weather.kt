@@ -15,7 +15,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 data class WDay(val date: String, val code: Int, val max: Double, val min: Double, val rain: Int)
-data class WInfo(val place: String, val temp: Double, val code: Int, val days: List<WDay>, val fetched: Long, val isDay: Int = -1)
+data class WInfo(val place: String, val temp: Double, val code: Int, val days: List<WDay>, val fetched: Long, val isDay: Int = -1, val cloud: Int = -1)
 
 /** 날씨: Open-Meteo (무료, 키 필요 없음) */
 object Weather {
@@ -89,7 +89,7 @@ object Weather {
         val lat = loc?.latitude ?: GUNSAN_LAT
         val lon = loc?.longitude ?: GUNSAN_LON
         val url = "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon" +
-                "&current=temperature_2m,weather_code,is_day" +
+                "&current=temperature_2m,weather_code,is_day,cloud_cover" +
                 "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max" +
                 "&timezone=Asia%2FSeoul&forecast_days=5"
         val c = URL(url).openConnection() as HttpURLConnection
@@ -108,7 +108,7 @@ object Weather {
             )
         }
         val info = WInfo(placeName(ctx, lat, lon), cur.optDouble("temperature_2m"), cur.optInt("weather_code"),
-            days, System.currentTimeMillis(), cur.optInt("is_day", -1))
+            days, System.currentTimeMillis(), cur.optInt("is_day", -1), cur.optInt("cloud_cover", -1))
         Prefs(ctx).p.edit().putString("weather", toJson(info).toString()).apply()
         return info
     }
@@ -127,7 +127,7 @@ object Weather {
     private fun toJson(w: WInfo): JSONObject {
         val a = JSONArray()
         for (d in w.days) a.put(JSONObject().put("date", d.date).put("code", d.code).put("max", d.max).put("min", d.min).put("rain", d.rain))
-        return JSONObject().put("place", w.place).put("temp", w.temp).put("code", w.code).put("days", a).put("fetched", w.fetched).put("isDay", w.isDay)
+        return JSONObject().put("place", w.place).put("temp", w.temp).put("code", w.code).put("days", a).put("fetched", w.fetched).put("isDay", w.isDay).put("cloud", w.cloud)
     }
 
     private fun fromJson(o: JSONObject): WInfo {
@@ -136,6 +136,6 @@ object Weather {
             val d = a.getJSONObject(i)
             WDay(d.getString("date"), d.getInt("code"), d.getDouble("max"), d.getDouble("min"), d.getInt("rain"))
         }
-        return WInfo(o.getString("place"), o.getDouble("temp"), o.getInt("code"), days, o.getLong("fetched"), o.optInt("isDay", -1))
+        return WInfo(o.getString("place"), o.getDouble("temp"), o.getInt("code"), days, o.getLong("fetched"), o.optInt("isDay", -1), o.optInt("cloud", -1))
     }
 }
