@@ -110,6 +110,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     private var viewBase = 0
     private var sentOffset = 0
     private val utterRanges = HashMap<String, Triple<Int, Int, Int>>()
+    /** 이번에 창을 연 뒤의 대화가 history 어디서부터인지. 그 앞은 이미 끝난 일이라 참고만 */
+    private var sessionStart = 0
     /** 쿠비스가 말하는 동안에도 듣기 (T가 끼어들면 멈춤) */
     private var bargeMode = false
     private var bargeRetries = 0
@@ -123,6 +125,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         // 요금 줄이기: 한 번만 기본을 Haiku로 (나중에 T가 다시 고르면 그대로 둠)
         if (!prefs.p.getBoolean("modelMig1", false)) prefs.p.edit().putString("model", "claude-haiku-5-5").putBoolean("modelMig1", true).apply()
         loadHistory()
+        sessionStart = history.size
         panel.greet()
         panel.micBtn.setOnClickListener { tap() }
         panel.onSend = { t -> interrupt(); handleUser(t) }
@@ -200,6 +203,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         halted = false
         listenRetries = 0
         misses = 0
+        Earcon.ready(act)
         startListening()
     }
 
@@ -467,7 +471,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (halted) goIdle() else {
             setState("listening")
             main.postDelayed({
-                if (!halted && state == "listening" && !askingPermission && recognizerIdle()) { muteBeep(true); startListening(); main.postDelayed({ muteBeep(false) }, 700) }
+                if (!halted && state == "listening" && !askingPermission && recognizerIdle()) { Earcon.ready(act); muteBeep(true); startListening(); main.postDelayed({ muteBeep(false) }, 700) }
             }, 450)
         }
     }
@@ -499,7 +503,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     fun newChat() {
         interrupt()
-        history.clear(); saveHistory(); panel.clear(); setState("idle")
+        history.clear(); sessionStart = 0; saveHistory(); panel.clear(); setState("idle")
     }
 
     fun interrupt(keepListening: Boolean = false) {
@@ -544,13 +548,17 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         if (prefs.extra.isNotBlank()) dyn.add("T가 알려 둔 것: ${prefs.extra}")
         val mem = Store(act).memory()
         if (mem.isNotEmpty()) dyn.add("T에 대해 기억하는 것(필요할 때만):\n" + mem.joinToString("\n") { "- $it" })
+        val past = history.take(sessionStart.coerceAtMost(history.size)).takeLast(10)
+        if (past.isNotEmpty()) dyn.add("조금 전 대화 (이미 끝난 일이다. 다시 하거나 다시 말하지 말고, T가 그 얘기를 이어서 물을 때만 참고):\n" +
+            past.joinToString("\n") { (r, c) -> (if (r == "user") "T: " else "쿠비스: ") + c.replace("\n", " ").take(160) })
         return JSONArray()
             .put(JSONObject().put("type", "text").put("text", staticPrompt).put("cache_control", JSONObject().put("type", "ephemeral")))
             .put(JSONObject().put("type", "text").put("text", dyn.joinToString("\n")))
     }
 
     private fun startMessages(): JSONArray {
-        val recent = history.takeLast(maxHistory).toMutableList()
+        // 이번 창에서 한 대화만 주고받음 (앞 창의 일은 시스템 설명에 '끝난 일'로만 넣음 → 날씨를 다시 띄우는 일 없게)
+        val recent = history.drop(sessionStart.coerceAtMost(history.size)).takeLast(maxHistory).toMutableList()
         while (recent.isNotEmpty() && recent.first().first != "user") recent.removeAt(0)
         val msgs = JSONArray()
         for ((r, c) in recent) msgs.put(JSONObject().put("role", r).put("content", c))
@@ -874,5 +882,23 @@ object Usage {
             "$name: 호출 ${o.optLong("calls")}번 · 읽은 양 ${"%,d".format(o.optLong("in"))} · 쓴 양 ${"%,d".format(o.optLong("out"))} 토큰"
         }
         return if (lines.isEmpty()) "이번 달(${m}) 아직 사용 기록이 없어요." else "이번 달(${m})\n" + lines.joinToString("\n")
+    }
+}
+
+/** 들을 준비가 되면 나는 짧은 소리 (구글 '띵' 대신, 미디어 볼륨을 잠깐 줄여도 들리게 알림 소리로) */
+object Earcon {
+    private var pool: android.media.SoundPool? = null
+    private var id = 0
+    private var loaded = false
+    fun ready(ctx: Context) {
+        val p = pool ?: android.media.SoundPool.Builder().setMaxStreams(1).setAudioAttributes(
+            android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build()).build().also { sp ->
+            pool = sp
+            sp.setOnLoadCompleteListener { s, i, st -> if (st == 0) { loaded = true; s.play(i, 0.6f, 0.6f, 1, 0, 1f) } }
+            try { id = sp.load(ctx.assets.openFd("scene/ready.wav"), 1) } catch (_: Exception) {}
+            return
+        }
+        if (loaded && id != 0) p.play(id, 0.6f, 0.6f, 1, 0, 1f)
     }
 }
