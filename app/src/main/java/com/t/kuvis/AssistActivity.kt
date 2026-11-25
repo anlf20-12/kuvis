@@ -69,10 +69,10 @@ class AssistActivity : Activity(), KuvisCore.Listener {
         core.startSoon()
     }
 
-    /** 평소엔 화면 아래 86% (Claude 앱처럼 위에 홈이 조금 보임), 크게 보기면 상태 표시줄 아래까지 */
+    /** 평소엔 화면 아래 절반쯤(55%) — Claude 앱 음성 대화처럼, 크게 보기면 상태 표시줄 아래까지 */
     private fun sheetParams(): FrameLayout.LayoutParams {
         val h = if (expanded) ViewGroup.LayoutParams.MATCH_PARENT
-                else (resources.displayMetrics.heightPixels * 0.86f).toInt() + navInset
+                else (resources.displayMetrics.heightPixels * 0.55f).toInt() + navInset
         return FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h, Gravity.BOTTOM).apply {
             if (expanded) topMargin = statusInset + dp(8)
         }
