@@ -106,6 +106,18 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     /** 못 알아들은 말·쿠비스에게 한 말이 아닌 것이 이어진 횟수 (3번이면 창 닫기) */
     private var misses = 0
     private var heardSpeech = false
+    /** 지금 대화 창의 답 글이 turnText 어디서부터인지 (도구 줄이 끼면 새 답 글이 시작됨) */
+    private var viewBase = 0
+    private var sentOffset = 0
+    private val utterRanges = HashMap<String, Triple<Int, Int, Int>>()
+    /** 쿠비스가 말하는 동안에도 듣기 (T가 끼어들면 멈춤) */
+    private var bargeMode = false
+    private var bargeRetries = 0
+    private var lastPartial = ""
+    private val endpoint = Runnable {
+        // 말이 0.9초 멈추면 기다리지 않고 바로 끝냄 (구글 인식기는 더 오래 기다림)
+        if (state == "listening" && !bargeMode && lastPartial.isNotBlank()) try { recognizer?.stopListening() } catch (_: Exception) {}
+    }
 
     init {
         // 요금 줄이기: 한 번만 기본을 Haiku로 (나중에 T가 다시 고르면 그대로 둠)
@@ -132,9 +144,21 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                 tts?.language = Locale.KOREAN
                 // 설정에서 고른 목소리
                 try { tts?.voices?.firstOrNull { it.name == prefs.voice }?.let { tts?.voice = it } } catch (_: Exception) {}
+                // 한 번만: 목소리를 아직 안 골랐으면 가장 자연스러운(고음질·온라인) 한국어 목소리로
+                if (prefs.voice.isBlank() && !prefs.p.getBoolean("voiceAuto1", false)) try {
+                    val best = tts?.voices?.filter { it.locale.language == "ko" &&
+                        it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true }
+                        ?.sortedWith(compareByDescending<android.speech.tts.Voice> { it.quality }
+                            .thenByDescending { it.isNetworkConnectionRequired })?.firstOrNull()
+                    if (best != null) { tts?.voice = best; prefs.p.edit().putString("voice", best.name).putFloat("rate", 1.0f).apply() }
+                    prefs.p.edit().putBoolean("voiceAuto1", true).apply()
+                } catch (_: Exception) {}
                 ttsReady = true
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(id: String?) {}
+                    override fun onStart(id: String?) {
+                        val r = utterRanges[id ?: ""] ?: return
+                        main.post { if (r.third == viewBase && r.first - r.third >= 0) panel.highlight(r.first - r.third, r.second - r.third) }
+                    }
                     override fun onDone(id: String?) { main.post { utterFinished() } }
                     @Deprecated("Deprecated in Java")
                     override fun onError(id: String?) { main.post { utterFinished() } }
@@ -230,14 +254,18 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         return SpeechRecognizer.createSpeechRecognizer(act, pick)
     }
 
-    private fun startListening() {
+    private fun startListening(barge: Boolean = false) {
         if (!hasMic()) {
+            if (barge) return
             askingPermission = true
             act.requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
             return
         }
-        stopSpeaking()
-        recognizer?.destroy()
+        if (!barge) stopSpeaking()
+        bargeMode = barge
+        main.removeCallbacks(endpoint)
+        lastPartial = ""
+        try { recognizer?.destroy() } catch (_: Exception) {}
         val r = makeRecognizer()
         if (r == null) {
             panel.showError("음성 인식 엔진이 없어요. Play 스토어에서 'Google' 앱을 설치·업데이트해 주세요.")
@@ -248,21 +276,47 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) { listenRetries = 0 }
             override fun onBeginningOfSpeech() { heardSpeech = true }
-            override fun onRmsChanged(rmsdB: Float) { if (state == "listening") panel.setLevel(rmsdB) }
+            override fun onRmsChanged(rmsdB: Float) { if (state == "listening" && !bargeMode) panel.setLevel(rmsdB) }
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
             override fun onEvent(eventType: Int, params: Bundle?) {}
             override fun onPartialResults(b: Bundle?) {
                 val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (!t.isNullOrBlank()) panel.setInterim(t)
+                if (t.isNullOrBlank()) return
+                if (bargeMode) {
+                    // 쿠비스 자기 목소리가 마이크로 들어온 것이면 무시, T 목소리면 바로 멈추고 들음
+                    if (isEcho(t) || t.replace(" ", "").length < 2) return
+                    bargeIn()
+                }
+                lastPartial = t
+                panel.setInterim(t)
+                main.removeCallbacks(endpoint); main.postDelayed(endpoint, 900)
             }
             override fun onResults(b: Bundle?) {
+                main.removeCallbacks(endpoint)
+                if (bargeMode) {
+                    val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().trim()
+                    if (t.isNotEmpty() && !isEcho(t)) { bargeIn(); handleUser(t) }
+                    else if (state == "speaking") main.postDelayed({ if (state == "speaking" && bargeMode) startListening(barge = true) }, 200)
+                    return
+                }
                 if (state != "listening") return
                 val t = b?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().trim()
+                    .ifEmpty { lastPartial.trim() }
                 if (t.isNotEmpty()) handleUser(t) else relisten(250)
             }
             override fun onError(error: Int) {
+                main.removeCallbacks(endpoint)
+                if (bargeMode) {
+                    // 말하는 동안 듣기는 조용히 다시 (몇 번까지만)
+                    if (state == "speaking" && ++bargeRetries <= 6) main.postDelayed({ if (state == "speaking" && bargeMode) startListening(barge = true) }, 400)
+                    return
+                }
                 if (state != "listening") return
+                // 끊겼어도 들은 말이 있으면 그걸로
+                if (lastPartial.isNotBlank() && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || error == 11 || error == SpeechRecognizer.ERROR_CLIENT)) {
+                    val t = lastPartial.trim(); lastPartial = ""; handleUser(t); return
+                }
                 when (error) {
                     // 말이 없으면 꺼지지 않고 계속 기다림
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> relisten(250)
@@ -284,13 +338,33 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 700L)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.packageName)
         }
         heardSpeech = false
         lastListenStart = System.currentTimeMillis()
-        setState("listening")
+        if (!barge) setState("listening")
         r.startListening(intent)
+    }
+
+    /** T가 쿠비스 말 중간에 끼어듦: 읽기와 답 받기를 멈추고 듣기로 */
+    private fun bargeIn() {
+        if (!bargeMode) return
+        bargeMode = false
+        interrupt(keepListening = true)
+        panel.replyDone()
+        setState("listening")
+    }
+
+    /** 들린 말이 쿠비스가 방금 읽은 답과 비슷하면 (스피커 소리가 마이크로 들어온 것) */
+    private fun isEcho(heard: String): Boolean {
+        fun norm(x: String) = x.filter { it.isLetterOrDigit() }
+        val h = norm(heard); val said = norm(turnText.toString())
+        if (h.length < 2 || said.isEmpty()) return said.isNotEmpty() && h.length < 2
+        val pairs = (0 until h.length - 1).map { h.substring(it, it + 2) }
+        val hit = pairs.count { said.contains(it) }
+        return hit >= pairs.size * 0.5
     }
 
     /** 조용히 다시 듣기 (다시 시작할 때 나는 '띵' 소리는 잠깐 줄임) */
@@ -331,16 +405,21 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             .replace(Regex("\\s+"), " ")
             .trim()
 
-    private fun enqueueSpeech(sentence: String) {
+    private fun enqueueSpeech(sentence: String, start: Int = -1, end: Int = -1) {
         val s = cleanForSpeech(sentence)
         if (!s.any { it.isLetterOrDigit() }) return
         if (s.isEmpty() || !ttsReady || !prefs.speak) return
         muteBeep(false)
-        if (state != "speaking") setState("speaking")
+        val first = state != "speaking"
+        if (first) setState("speaking")
         pendingUtter++
         tts?.setSpeechRate(prefs.rate)
         tts?.setPitch(prefs.pitch)
-        tts?.speak(s, TextToSpeech.QUEUE_ADD, null, "u${utterSeq++}")
+        val id = "u${utterSeq++}"
+        if (start >= 0) utterRanges[id] = Triple(start, end, viewBase)
+        tts?.speak(s, TextToSpeech.QUEUE_ADD, null, id)
+        // 말하는 동안에도 들어서 T가 끼어들 수 있게
+        if (first && !halted) { bargeRetries = 0; startListening(barge = true) }
     }
 
     private fun utterFinished() {
@@ -365,6 +444,8 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
     private fun finishTurn() {
         if (state != "speaking" && state != "thinking") return
         streamDone = false
+        panel.replyDone()
+        bargeMode = false
         val perms = synchronized(phone.pendingPerms) { phone.pendingPerms.toTypedArray().also { phone.pendingPerms.clear() } }
         val launches = synchronized(phone.pendingLaunches) { phone.pendingLaunches.toList().also { phone.pendingLaunches.clear() } }
         if (perms.isNotEmpty()) {
@@ -418,10 +499,10 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
 
     fun newChat() {
         interrupt()
-        history.clear(); saveHistory(); panel.greet(); setState("idle")
+        history.clear(); saveHistory(); panel.clear(); setState("idle")
     }
 
-    fun interrupt() {
+    fun interrupt(keepListening: Boolean = false) {
         gen++
         val c = conn; conn = null
         if (c != null) Thread { try { c.disconnect() } catch (_: Exception) {} }.start()
@@ -436,7 +517,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             saveHistory()
         }
         stopSpeaking()
-        stopListening()
+        if (!keepListening) stopListening()
         streamDone = false
     }
 
@@ -542,7 +623,13 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
                         if (t == "server_tool_use") main.post { if (gen == myGen && state != "speaking") setState("thinking", "검색 중…") }
                         if (t == "tool_use") {
                             val label = phone.label(b.optString("name"))
-                            main.post { if (gen == myGen && state != "speaking") setState("thinking", label) }
+                            main.post {
+                                if (gen == myGen) {
+                                    panel.addTool(label)
+                                    viewBase = turnText.length
+                                    if (state != "speaking") setState("thinking", label)
+                                }
+                            }
                         }
                     }
                     "content_block_delta" -> {
@@ -595,13 +682,14 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         }
     }
 
-    private fun appendSpoken(t: String) {
+    private fun appendSpoken(raw: String) {
+        val t = raw.replace("**", "")
         if (turnText.isNotEmpty() && t.isNotEmpty() && needSpace) {
             turnText.append(' '); splitter.push(" ")
         }
         needSpace = false
         turnText.append(t)
-        panel.showReply(turnText.toString().replace("**", ""))
+        panel.showReply(turnText.substring(viewBase.coerceAtMost(turnText.length)).trimStart())
         splitter.push(t)
     }
 
@@ -617,7 +705,15 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
         turnText = StringBuilder()
         turnActive = true
         needSpace = false
-        splitter = Splitter { s -> if (gen == myGen) enqueueSpeech(s) }
+        viewBase = 0; sentOffset = 0; utterRanges.clear()
+        splitter = Splitter { s ->
+            val st = sentOffset; sentOffset += s.length
+            if (gen == myGen) {
+                // 답 글 앞의 빈칸을 잘라서 보여 주므로 그만큼 맞춤
+                val lead = turnText.substring(viewBase.coerceAtMost(turnText.length)).let { it.length - it.trimStart().length }
+                enqueueSpeech(s, st - lead, st + s.length - lead)
+            }
+        }
         phone.pendingLaunches.clear()
         phone.pendingPerms.clear()
 
@@ -682,7 +778,7 @@ class KuvisCore(private val act: Activity, private val panel: KuvisPanel, privat
             // 쿠비스에게 한 말이 아니라고 모델이 판단 → 조용히 넘기고 셈
             if (history.isNotEmpty() && history.last().first == "user") history.removeAt(history.size - 1)
             saveHistory()
-            panel.greet()
+            panel.dropLive()
             if (countMiss()) return
             streamDone = true
             if (pendingUtter == 0) finishTurn()
@@ -743,6 +839,11 @@ class Splitter(private val onSentence: (String) -> Unit) {
             val ch = buf[i]
             if (ch == '\n') return i
             if ((ch == '.' || ch == '!' || ch == '?' || ch == '…') && buf[i + 1].isWhitespace()) return i
+        }
+        // 첫 문장이 길면 쉼표에서 먼저 끊어 읽기 시작을 앞당김
+        if (buf.length >= 36) {
+            val c = buf.lastIndexOf(", ", 60)
+            if (c in 12 until buf.length - 1) return c
         }
         return -1
     }

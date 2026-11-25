@@ -25,19 +25,25 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * 쿠비스 대화 창 — Claude 앱 음성 대화 화면과 같은 모양.
- * 아래에서 올라오는 어두운 시트, 가운데 별꽃 마크와 지금 하는 말, 큰 마이크 버튼,
- * 아래 왼쪽 모델 고르기, 오른쪽 소리 켜기/끄기와 끝내기(X).
- * 대화 글이 쌓이는 목록은 없고, 지금 듣거나 말하는 것만 보인다.
+ * 쿠비스 대화 창 — T가 녹화해 준 Claude 앱 음성 대화 화면을 보고 맞춤 (2026-11-25).
+ * 화면 대부분을 덮는 어두운 시트(위쪽에 홈이 조금 보임), 손잡이, 대화가 위에서부터 쌓이는 글 목록.
+ *  - T가 한 말: 오른쪽 회색 말풍선
+ *  - 쿠비스 답: 왼쪽 큰 글씨. 지금 읽는 문장만 하얗고 굵게, 나머지는 흐리게 (노래방처럼)
+ *  - 도구 쓴 것: 작은 회색 줄 (예: "▢ 일정 넣기 ›")
+ * 아래 가운데 작은 듣기 버튼, 왼쪽 아래 모델(Haiku ⌄), 오른쪽 아래 스피커와 하얀 끝내기 버튼.
  */
 class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
 
     companion object {
         val ORANGE = Color.parseColor("#D97757")
         val ORANGE_DIM = Color.parseColor("#6E3F33")
-        private val GREY = Color.parseColor("#9A9DA3")
-        private val BTN = Color.parseColor("#26272B")
-        private val BTN_LINE = Color.parseColor("#33353A")
+        private val BG = Color.parseColor("#262624")
+        private val GREY = Color.parseColor("#8E8E93")
+        private val DIM = Color.parseColor("#7C7C80")
+        private val BRIGHT = Color.parseColor("#F2F2F2")
+        private val DONE = Color.parseColor("#E3E3E5")
+        private val BUBBLE = Color.parseColor("#3A3A3C")
+        private val BTN = Color.parseColor("#333335")
         private const val GREETING = "T, 이야기해요"
         private const val MATCH = -1  // MATCH_PARENT
         private const val WRAP = -2   // WRAP_CONTENT
@@ -47,107 +53,125 @@ class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
     val expandBtn = IconView(ctx, IconView.EXPAND)
     val setBtn = IconView(ctx, IconView.GEAR)
     val spark = SparkView(ctx)
-    private val caption = TextView(ctx)
     val micBtn = IconView(ctx, IconView.MIC)
     val modelBtn = LinearLayout(ctx)
     private val modelLabel = TextView(ctx)
     val speakerBtn = IconView(ctx, IconView.SPEAKER)
     val closeBtn = IconView(ctx, IconView.CLOSE)
 
+    private val scroll = android.widget.ScrollView(ctx)
+    private val list = LinearLayout(ctx)
+    private val empty = LinearLayout(ctx)
+    private val emptyText = TextView(ctx)
+    private val statusText = TextView(ctx)
+    private val thinkSpark = SparkView(ctx)
+
+    private var liveUser: TextView? = null
+    private var reply: TextView? = null
+    private var replyText = ""
+    private var hiStart = -1
+    private var hiEnd = -1
+
     private var pulse: ValueAnimator? = null
     private var spin: ValueAnimator? = null
     private var state = "idle"
-    private var replyShown = false
 
     var onSend: ((String) -> Unit)? = null
+
+    // init 보다 위에 있어야 함 (init의 greet()가 씀)
+    private val statusRow: LinearLayout by lazy {
+        LinearLayout(context).apply {
+            orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, context.dp(10), 0, 0)
+            addView(thinkSpark, LayoutParams(context.dp(18), context.dp(18)))
+            addView(statusText, LayoutParams(WRAP, WRAP).apply { leftMargin = context.dp(8) })
+        }
+    }
 
     init {
         orientation = VERTICAL
         isClickable = true // 바깥 닫기와 구분
-        val r = ctx.dpf(28f)
-        background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(
-            Color.parseColor("#151515"), Color.parseColor("#151515"),
-            Color.parseColor("#1B1F27"), Color.parseColor("#3C4A5E"), Color.parseColor("#55657C")
-        )).apply { cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) }
+        val r = ctx.dpf(26f)
+        background = GradientDrawable().apply { setColor(BG); cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) }
 
-        // 맨 위: 손잡이 + 크게 보기
+        // 맨 위: 설정(작게) · 손잡이 · 크게 보기
         val top = FrameLayout(ctx)
         handle.background = rounded(Color.parseColor("#5C5D61"), ctx.dpf(3f))
-        top.addView(handle, FrameLayout.LayoutParams(ctx.dp(44), ctx.dp(5), Gravity.CENTER_HORIZONTAL or Gravity.TOP)
-            .apply { topMargin = ctx.dp(14) })
-        expandBtn.contentDescription = "크게 보기"
-        top.addView(expandBtn, FrameLayout.LayoutParams(ctx.dp(40), ctx.dp(40), Gravity.END or Gravity.TOP)
-            .apply { topMargin = ctx.dp(10); rightMargin = ctx.dp(14) })
-        addView(top, LayoutParams(MATCH, ctx.dp(60)))
-
-        // 설정(톱니바퀴) — 오른쪽
-        val gearRow = FrameLayout(ctx)
+        top.addView(handle, FrameLayout.LayoutParams(ctx.dp(40), ctx.dp(5), Gravity.CENTER_HORIZONTAL or Gravity.TOP)
+            .apply { topMargin = ctx.dp(12) })
         setBtn.contentDescription = "쿠비스 설정"
-        setBtn.background = circle(BTN, BTN_LINE)
-        setBtn.pad = 0.30f
-        gearRow.addView(setBtn, FrameLayout.LayoutParams(ctx.dp(60), ctx.dp(60), Gravity.END).apply { rightMargin = ctx.dp(16) })
-        addView(gearRow, LayoutParams(MATCH, WRAP))
+        setBtn.color = GREY; setBtn.pad = 0.26f
+        top.addView(setBtn, FrameLayout.LayoutParams(ctx.dp(38), ctx.dp(38), Gravity.START or Gravity.TOP)
+            .apply { topMargin = ctx.dp(8); leftMargin = ctx.dp(12) })
+        expandBtn.contentDescription = "크게 보기"
+        expandBtn.color = GREY; expandBtn.pad = 0.30f
+        top.addView(expandBtn, FrameLayout.LayoutParams(ctx.dp(38), ctx.dp(38), Gravity.END or Gravity.TOP)
+            .apply { topMargin = ctx.dp(8); rightMargin = ctx.dp(12) })
+        addView(top, LayoutParams(MATCH, ctx.dp(48)))
 
-        addView(View(ctx), LayoutParams(MATCH, 0, 1f))
-
-        // 가운데: 별꽃 마크 + 지금 하는 말
-        addView(spark, LayoutParams(ctx.dp(66), ctx.dp(66)).apply { gravity = Gravity.CENTER_HORIZONTAL })
-        caption.apply {
-            gravity = Gravity.CENTER
-            setTextColor(GREY)
-            setLineSpacing(0f, 1.15f)
-            setPadding(ctx.dp(28), ctx.dp(12), ctx.dp(28), ctx.dp(4))
-            maxLines = 6
-            ellipsize = TextUtils.TruncateAt.START
+        // 가운데: 대화 글 목록 (처음엔 별꽃 + "T, 이야기해요")
+        val mid = FrameLayout(ctx)
+        list.orientation = VERTICAL
+        list.setPadding(ctx.dp(22), ctx.dp(6), ctx.dp(22), ctx.dp(16))
+        scroll.addView(list, FrameLayout.LayoutParams(MATCH, WRAP))
+        scroll.isVerticalScrollBarEnabled = false
+        scroll.overScrollMode = View.OVER_SCROLL_NEVER
+        mid.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        empty.orientation = VERTICAL; empty.gravity = Gravity.CENTER
+        empty.addView(spark, LayoutParams(ctx.dp(40), ctx.dp(40)))
+        emptyText.apply {
+            text = GREETING; textSize = 15f; setTextColor(GREY); gravity = Gravity.CENTER
+            setPadding(0, ctx.dp(10), 0, 0)
         }
-        addView(caption, LayoutParams(MATCH, WRAP))
+        empty.addView(emptyText, LayoutParams(WRAP, WRAP))
+        mid.addView(empty, FrameLayout.LayoutParams(MATCH, MATCH))
+        addView(mid, LayoutParams(MATCH, 0, 1f))
 
-        // 마이크 (누르면 듣기/멈추기, 길게 누르면 글로 입력)
+        // 생각 중 표시 (목록 맨 끝에 붙는 작은 별꽃 + 글)
+        thinkSpark.color = ORANGE
+        statusText.apply { textSize = 13f; setTextColor(GREY) }
+
+        // 아래 가운데: 듣기 버튼 (누르면 듣기/멈추기, 길게 누르면 글로 입력)
         micBtn.contentDescription = "말하기"
-        micBtn.background = circle(Color.parseColor("#2A2B30"), BTN_LINE)
+        micBtn.background = circle(BTN)
         micBtn.pad = 0.30f
-        micBtn.elevation = ctx.dpf(6f)
         micBtn.setOnLongClickListener { typeDialog(); true }
-        addView(micBtn, LayoutParams(ctx.dp(86), ctx.dp(86)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL; topMargin = ctx.dp(14)
-        })
+        addView(micBtn, LayoutParams(ctx.dp(54), ctx.dp(54)).apply { gravity = Gravity.CENTER_HORIZONTAL; topMargin = ctx.dp(4) })
 
-        // 맨 아래 줄
+        // 맨 아래 줄: 모델 · 스피커 · 끝내기
         val bottom = FrameLayout(ctx)
         modelBtn.apply {
             orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = rounded(BTN, ctx.dpf(30f), ctx.dp(1), BTN_LINE)
-            setPadding(ctx.dp(22), 0, ctx.dp(16), 0)
+            background = rounded(BTN, ctx.dpf(20f))
+            setPadding(ctx.dp(14), 0, ctx.dp(8), 0)
             contentDescription = "모델 고르기"
         }
-        modelLabel.apply { textSize = 17f; setTextColor(Color.parseColor("#E8E8EA")) }
+        modelLabel.apply { textSize = 14f; setTextColor(Color.parseColor("#E8E8EA")) }
         modelBtn.addView(modelLabel)
-        modelBtn.addView(IconView(ctx, IconView.CHEVRONS).apply { pad = 0.18f },
-            LayoutParams(ctx.dp(26), ctx.dp(26)).apply { leftMargin = ctx.dp(8) })
-        bottom.addView(modelBtn, FrameLayout.LayoutParams(WRAP, ctx.dp(58), Gravity.START or Gravity.CENTER_VERTICAL)
+        modelBtn.addView(IconView(ctx, IconView.CHEVRONS).apply { pad = 0.24f; color = GREY },
+            LayoutParams(ctx.dp(20), ctx.dp(20)).apply { leftMargin = ctx.dp(4) })
+        bottom.addView(modelBtn, FrameLayout.LayoutParams(WRAP, ctx.dp(38), Gravity.START or Gravity.CENTER_VERTICAL)
             .apply { leftMargin = ctx.dp(18) })
 
         val right = LinearLayout(ctx).apply { orientation = HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        speakerBtn.background = circle(BTN, BTN_LINE)
-        speakerBtn.pad = 0.29f
+        speakerBtn.pad = 0.28f
+        speakerBtn.color = Color.parseColor("#C7C7CC")
         speakerBtn.contentDescription = "소리 켜기/끄기"
-        right.addView(speakerBtn, LayoutParams(ctx.dp(58), ctx.dp(58)))
-        closeBtn.background = circle(Color.WHITE, Color.WHITE)
-        closeBtn.color = Color.parseColor("#111111")
-        closeBtn.pad = 0.32f
+        right.addView(speakerBtn, LayoutParams(ctx.dp(44), ctx.dp(44)))
+        closeBtn.background = circle(Color.WHITE)
+        closeBtn.color = Color.parseColor("#1C1C1E")
+        closeBtn.pad = 0.33f
         closeBtn.contentDescription = "끝내기"
-        right.addView(closeBtn, LayoutParams(ctx.dp(58), ctx.dp(58)).apply { leftMargin = ctx.dp(12) })
+        right.addView(closeBtn, LayoutParams(ctx.dp(46), ctx.dp(46)).apply { leftMargin = ctx.dp(10) })
         bottom.addView(right, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.CENTER_VERTICAL)
-            .apply { rightMargin = ctx.dp(18) })
-        addView(bottom, LayoutParams(MATCH, ctx.dp(70)).apply { topMargin = ctx.dp(22); bottomMargin = ctx.dp(14) })
+            .apply { rightMargin = ctx.dp(16) })
+        addView(bottom, LayoutParams(MATCH, ctx.dp(60)).apply { topMargin = ctx.dp(6); bottomMargin = ctx.dp(10) })
 
         greet()
         setState("idle", null)
     }
 
-    private fun circle(fill: Int, line: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL; setColor(fill); setStroke(context.dp(1), line)
-    }
+    private fun circle(fill: Int) = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(fill) }
 
     private fun typeDialog() {
         val et = EditText(context).apply {
@@ -163,18 +187,36 @@ class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
     }
 
     // ---------------------------------------------------------------
-    private fun captionStyle(kind: String) {
-        when (kind) {
-            "greet" -> { caption.textSize = 20f; caption.typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL); caption.setTextColor(GREY) }
-            "interim" -> { caption.textSize = 18f; caption.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC); caption.setTextColor(GREY) }
-            "reply" -> { caption.textSize = 16f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#D4D6DA")) }
-            "status" -> { caption.textSize = 14f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(GREY) }
-            "error" -> { caption.textSize = 14f; caption.typeface = Typeface.DEFAULT; caption.setTextColor(Color.parseColor("#F2A39A")) }
-        }
+    private fun hasItems() = list.childCount > 0 && (list.childCount > 1 || list.getChildAt(0) != statusRow)
+    private fun refreshEmpty() { empty.visibility = if (hasItems()) View.GONE else View.VISIBLE }
+    private fun scrollDown() { scroll.post { scroll.fullScroll(View.FOCUS_DOWN) } }
+
+    private fun showStatus(msg: String?) {
+        (statusRow.parent as? ViewGroup)?.removeView(statusRow)
+        statusText.text = msg ?: ""
+        list.addView(statusRow)
+        refreshEmpty(); scrollDown()
     }
 
-    /** 처음 열렸을 때: "T, 이야기해요" */
-    fun greet() { replyShown = false; captionStyle("greet"); caption.text = GREETING }
+    private fun hideStatus() { (statusRow.parent as? ViewGroup)?.removeView(statusRow); refreshEmpty() }
+
+    private fun addItem(v: View, lp: LayoutParams) {
+        val hadStatus = statusRow.parent != null
+        if (hadStatus) list.removeView(statusRow)
+        list.addView(v, lp)
+        if (hadStatus) list.addView(statusRow)
+        refreshEmpty(); scrollDown()
+    }
+
+    /** 처음 열렸을 때 / 새 대화: 목록 비우고 "T, 이야기해요" */
+    fun greet() {
+        if (!hasItems()) { emptyText.text = GREETING; refreshEmpty() }
+    }
+
+    fun clear() {
+        list.removeAllViews(); liveUser = null; reply = null; replyText = ""
+        emptyText.text = GREETING; refreshEmpty()
+    }
 
     fun setModel(label: String) { modelLabel.text = label }
 
@@ -186,57 +228,128 @@ class KuvisPanel(ctx: Context) : LinearLayout(ctx) {
         state = s
         pulse?.cancel(); pulse = null
         spin?.cancel(); spin = null
+        micBtn.scaleX = 1f; micBtn.scaleY = 1f
         spark.scaleX = 1f; spark.scaleY = 1f
         spark.color = if (s == "listening") ORANGE_DIM else ORANGE
+        micBtn.icon = IconView.MIC
+        micBtn.background = circle(if (s == "listening") Color.parseColor("#3E3E41") else BTN)
         when (s) {
             "thinking" -> {
+                showStatus(msg ?: "")
                 spin = ValueAnimator.ofFloat(0f, 360f).apply {
-                    duration = 2400L; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
-                    addUpdateListener { a -> spark.rotation = a.animatedValue as Float }
+                    duration = 2000L; repeatCount = ValueAnimator.INFINITE; interpolator = LinearInterpolator()
+                    addUpdateListener { a -> val v = a.animatedValue as Float; thinkSpark.rotation = v; spark.rotation = v }
                     start()
                 }
-                if (msg != null) { captionStyle("status"); caption.text = msg; replyShown = false }
             }
             "speaking" -> {
-                pulse = ValueAnimator.ofFloat(1f, 1.12f).apply {
-                    duration = 380L; repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE
-                    addUpdateListener { a -> val v = a.animatedValue as Float; spark.scaleX = v; spark.scaleY = v }
+                hideStatus()
+                pulse = ValueAnimator.ofFloat(1f, 1.08f).apply {
+                    duration = 420L; repeatMode = ValueAnimator.REVERSE; repeatCount = ValueAnimator.INFINITE
+                    addUpdateListener { a -> val v = a.animatedValue as Float; micBtn.scaleX = v; micBtn.scaleY = v }
                     start()
                 }
             }
-            "listening" -> { if (msg != null) { captionStyle("status"); caption.text = msg } }
+            "listening" -> { hideStatus(); if (msg != null) emptyText.text = msg }
             else -> {
-                if (msg != null) { captionStyle("status"); caption.text = msg }
-                else if (!replyShown) greet()
+                hideStatus()
+                if (msg != null) { if (hasItems()) showError(msg) else emptyText.text = msg }
             }
         }
     }
 
+    /** 듣는 중 목소리 크기에 따라 듣기 버튼이 살짝 커짐 */
     fun setLevel(rms: Float) {
         val v = (rms.coerceIn(0f, 10f) / 10f)
+        val s = 1f + v * 0.16f
+        micBtn.scaleX = s; micBtn.scaleY = s
         spark.color = blend(ORANGE_DIM, ORANGE, v)
-        val s = 1f + v * 0.18f
-        spark.scaleX = s; spark.scaleY = s
     }
 
-    /** 듣는 중 들리는 말 (기울임 회색) */
+    private fun userBubble(): TextView = TextView(context).apply {
+        textSize = 16f; setTextColor(BRIGHT); setLineSpacing(0f, 1.2f)
+        background = rounded(BUBBLE, context.dpf(18f))
+        setPadding(context.dp(14), context.dp(9), context.dp(14), context.dp(9))
+    }
+
+    private fun bubbleParams() = LayoutParams(WRAP, WRAP).apply { gravity = Gravity.END; topMargin = context.dp(16) }
+
+    /** 듣는 중 들리는 말 — 오른쪽 말풍선에 흐리게 */
     fun setInterim(t: String) {
         if (t.isBlank()) return
-        replyShown = false
-        captionStyle("interim"); caption.text = t
+        val b = liveUser ?: userBubble().also { liveUser = it; addItem(it, bubbleParams()); it.maxWidth = (width * 0.82f).toInt().coerceAtLeast(context.dp(200)) }
+        b.setTextColor(GREY); b.text = t
+        scrollDown()
     }
 
     /** 사용자가 한 말 (다 들은 뒤) */
-    fun showUser(t: String) { replyShown = false; captionStyle("interim"); caption.text = t }
-
-    /** 쿠비스가 하는 말 (스트리밍으로 늘어남) */
-    fun showReply(t: String) {
-        replyShown = true
-        captionStyle("reply")
-        caption.text = if (t.length > 220) "…" + t.takeLast(220) else t
+    fun showUser(t: String) {
+        val b = liveUser ?: userBubble().also { addItem(it, bubbleParams()); it.maxWidth = (width * 0.82f).toInt().coerceAtLeast(context.dp(200)) }
+        b.setTextColor(BRIGHT); b.text = t
+        liveUser = null
+        reply = null; replyText = ""
+        scrollDown()
     }
 
-    fun showError(t: String) { replyShown = true; captionStyle("error"); caption.text = t }
+    /** 듣던 말이 없던 일이 됨 (쿠비스에게 한 말이 아님 등) */
+    fun dropLive() {
+        liveUser?.let { list.removeView(it) }; liveUser = null
+        reply?.let { if (replyText.isBlank() || !replyText.any { c -> c.isLetterOrDigit() }) list.removeView(it) }
+        reply = null; replyText = ""
+        refreshEmpty()
+    }
+
+    /** 도구 쓴 것 한 줄 (예: 일정 넣기 ›) */
+    fun addTool(label: String) {
+        val tv = TextView(context).apply {
+            text = "▢  ${label.removeSuffix("…").removeSuffix(" 중").trim()}  ›"; textSize = 13f; setTextColor(GREY)
+        }
+        addItem(tv, LayoutParams(WRAP, WRAP).apply { topMargin = context.dp(14) })
+        reply = null; replyText = ""
+    }
+
+    /** 쿠비스가 하는 말 (스트리밍으로 늘어남). 지금 읽는 문장만 밝게 */
+    fun showReply(t: String) {
+        val r = reply ?: TextView(context).apply {
+            textSize = 18f; setLineSpacing(0f, 1.32f); setTextColor(DIM)
+        }.also { reply = it; hiStart = -1; hiEnd = -1; addItem(it, LayoutParams(MATCH, WRAP).apply { topMargin = context.dp(14) }) }
+        replyText = t
+        paint(r, false)
+        scrollDown()
+    }
+
+    /** 지금 읽는 문장 위치 (답 글 안에서) */
+    fun highlight(start: Int, end: Int) {
+        hiStart = start; hiEnd = end
+        reply?.let { paint(it, false) }
+    }
+
+    /** 다 읽음 — 답 전체를 보통 밝기로 */
+    fun replyDone() {
+        hiStart = -1; hiEnd = -1
+        reply?.let { paint(it, true) }
+    }
+
+    private fun paint(tv: TextView, done: Boolean) {
+        val sp = android.text.SpannableString(replyText)
+        if (done || hiStart < 0) {
+            sp.setSpan(android.text.style.ForegroundColorSpan(if (done) DONE else DIM), 0, sp.length, 0)
+            if (!done && hiStart < 0 && replyText.isNotEmpty()) {
+                // 아직 읽기 전: 받은 글은 흐리게
+            }
+        } else {
+            val s = hiStart.coerceIn(0, sp.length); val e = hiEnd.coerceIn(s, sp.length)
+            sp.setSpan(android.text.style.ForegroundColorSpan(DIM), 0, sp.length, 0)
+            sp.setSpan(android.text.style.ForegroundColorSpan(BRIGHT), s, e, 0)
+            sp.setSpan(android.text.style.StyleSpan(Typeface.BOLD), s, e, 0)
+        }
+        tv.text = sp
+    }
+
+    fun showError(t: String) {
+        val tv = TextView(context).apply { text = t; textSize = 14f; setTextColor(Color.parseColor("#F2A39A")) }
+        addItem(tv, LayoutParams(WRAP, WRAP).apply { topMargin = context.dp(12) })
+    }
 
     private fun blend(a: Int, b: Int, f: Float): Int {
         fun ch(x: Int, y: Int) = (x + (y - x) * f).toInt()
