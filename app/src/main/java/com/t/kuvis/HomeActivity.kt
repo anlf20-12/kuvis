@@ -1189,7 +1189,16 @@ class HomeActivity : Activity() {
     }
 
     private val sceneTick = object : Runnable {
-        override fun run() { updateScene(); main.postDelayed(this, 60_000) }
+        override fun run() {
+            updateScene()
+            // 홈 화면이 켜져 있는 동안에도 30분마다 날씨를 새로 받아 그림을 맞춤
+            val w = lastWeather
+            if (w == null || w.cloud < 0 || System.currentTimeMillis() - w.fetched > 30 * 60_000L) Thread {
+                val n = Weather.get(this@HomeActivity)
+                runOnUiThread { if (n != null) { lastWeather = n; weatherW.setWeather(n); updateScene() } }
+            }.start()
+            main.postDelayed(this, 60_000)
+        }
     }
 
     /** 날씨·시간에 맞춰 그림 바꾸기 */

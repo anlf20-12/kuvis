@@ -56,7 +56,8 @@ object Weather {
     /** 네트워크를 쓰므로 백그라운드에서 부를 것 */
     fun get(ctx: Context, maxAgeMs: Long = 30 * 60_000L): WInfo? {
         val c = cached(ctx)
-        if (c != null && System.currentTimeMillis() - c.fetched < maxAgeMs) return c
+        // 구름 양이 없는 옛 저장값이면 바로 새로 받음
+        if (c != null && c.cloud >= 0 && System.currentTimeMillis() - c.fetched < maxAgeMs) return c
         return try { fetch(ctx) } catch (_: Exception) { c }
     }
 

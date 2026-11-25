@@ -61,7 +61,7 @@ object SceneSpots {
         if (c in 71..77 || c == 85 || c == 86) return "snow"
         if (isNight(w)) return "night"
         // 기상청 '흐림'에 가깝게: 날씨 코드(흐림·안개)뿐 아니라 구름 양이 60% 넘어도 흐린 그림
-        val cloudy = c == 3 || c == 45 || c == 48 || (w?.cloud ?: -1) >= 60
+        val cloudy = c == 3 || c == 45 || c == 48 || (w?.cloud ?: -1) >= 50
         return if (cloudy) "cloudy" else "clear"
     }
 
