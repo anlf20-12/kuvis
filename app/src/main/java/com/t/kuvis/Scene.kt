@@ -55,7 +55,10 @@ object SceneSpots {
     val moon = RectF(250f, 75f, 360f, 185f)
 
     /** 날씨 코드 + 낮/밤 → 그림 이름 */
-    fun key(w: WInfo?): String {
+    fun key(w: WInfo?, fromApp: String? = null): String {
+        // T 날씨 앱 위젯에 쓰인 글자가 있으면 그걸 먼저 (비·눈은 밤에도 그대로)
+        if (fromApp == "rain" || fromApp == "snow") return fromApp
+        if (fromApp != null) return if (isNight(w)) "night" else fromApp
         val c = w?.code ?: 0
         if (c in 51..67 || c in 80..82 || c in 95..99) return "rain"
         if (c in 71..77 || c == 85 || c == 86) return "snow"

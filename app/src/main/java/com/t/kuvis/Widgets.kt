@@ -474,7 +474,7 @@ object ClockMenu {
 
 /** 날씨를 누르면 휴대폰의 날씨 앱 열기 */
 object WeatherApp {
-    private val known = listOf(
+    val known = listOf(
         "com.sec.android.daemonapp",          // 삼성 날씨
         "com.samsung.android.weather",
         "com.google.android.apps.weather",

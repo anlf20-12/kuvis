@@ -72,6 +72,7 @@ class HomeActivity : Activity() {
     private lateinit var timetableW: TimetableCard
     private fun gridIdx() = if (pager.currentItem == 0) 0 else -1
     private var lastWeather: WInfo? = null
+    private lateinit var wxHolder: FrameLayout
     private lateinit var overlay: FrameLayout
     private lateinit var deleteBar: TextView
     private val main = Handler(Looper.getMainLooper())
@@ -193,6 +194,7 @@ class HomeActivity : Activity() {
 
         // 맨 아래 층: 화면 전체(상태 표시줄 뒤까지) 다누 그림
         val outer = FrameLayout(this)
+        wxHolder = outer
         outer.addView(sceneBg, FrameLayout.LayoutParams(MATCH, MATCH))
         outer.addView(root, FrameLayout.LayoutParams(MATCH, MATCH))
         setContentView(outer)
@@ -228,7 +230,9 @@ class HomeActivity : Activity() {
         refreshAll()
         Updater.checkQuietly(this)
         Hotword.sync(this)
-        main.removeCallbacks(sceneTick); main.post(sceneTick)
+        // T 날씨 앱 위젯을 안 보이게 띄워 두고 글자를 읽음 (처음 한 번 허용을 물을 수 있음)
+        if (::wxHolder.isInitialized) try { WeatherReader.ensure(this, wxHolder) } catch (_: Exception) {}
+        main.removeCallbacks(sceneTick); main.postDelayed(sceneTick, 1500)
         wallLight = null; barsDark = null
         if (drawer.visibility != View.VISIBLE) setBarIconsDark(wallpaperIsLight())
         if (Build.VERSION.SDK_INT >= 33 && Hotword.enabled(this) && !mp0().getBoolean("askedNotif", false) &&
@@ -298,6 +302,7 @@ class HomeActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (::wxHolder.isInitialized && WeatherReader.onResult(this, wxHolder, requestCode, resultCode == RESULT_OK)) { updateScene(); return }
         when (requestCode) {
             61 -> { if (resultCode == RESULT_OK) configureOrPlace() else cancelPending(); return }
             62 -> { if (resultCode == RESULT_OK) placePending() else cancelPending(); return }
@@ -1203,7 +1208,7 @@ class HomeActivity : Activity() {
 
     /** 날씨·시간에 맞춰 그림 바꾸기 */
     private fun updateScene() {
-        val k = SceneSpots.key(lastWeather)
+        val k = SceneSpots.key(lastWeather, WeatherReader.condition())
         if (k != sceneBg.key) {
             sceneBg.animate().cancel()
             sceneBg.animate().alpha(0.35f).setDuration(220).withEndAction {
